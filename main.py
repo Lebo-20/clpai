@@ -278,8 +278,22 @@ async def handle_document(message: Message):
             break
             
     if target_name:
+        # Hapus file lama jika ada untuk memastikan refresh total
+        old_size = 0
+        if os.path.exists(target_name):
+            old_size = os.path.getsize(target_name) / 1024
+            os.remove(target_name)
+            
         await bot.download_file((await bot.get_file(doc.file_id)).file_path, target_name)
-        await message.answer(f"✅ **{target_name}** berhasil diperbarui dan aktif!", parse_mode="Markdown")
+        new_size = os.path.getsize(target_name) / 1024
+        
+        msg = (
+            f"🔄 **Update Cookies Berhasil!**\n\n"
+            f"📁 File: `{target_name}`\n"
+            f"🗑️ Status: Cookie lama ({old_size:.1f} KB) telah dihapus.\n"
+            f"✅ Status: Cookie baru ({new_size:.1f} KB) telah diterima dan diaktifkan."
+        )
+        await message.answer(msg, parse_mode="Markdown")
     else:
         await message.answer(f"📦 File `{doc.file_name}` diterima, tapi sistem hanya memproses file cookies: `cookies.txt`, `cookies_tiktok.txt`, or `cookies_youtube.txt`.", parse_mode="Markdown")
 
