@@ -245,7 +245,14 @@ class VideoEngine:
 
         # STAGE 2: Transcribe (30-50%)
         if progress_callback: await progress_callback(30, "Transcribing audio...")
-        result = await asyncio.to_thread(self.whisper_model.transcribe, input_path)
+        
+        result = None
+        try:
+            # Whisper will crash if audio is empty or missing
+            result = await asyncio.to_thread(self.whisper_model.transcribe, input_path)
+        except Exception as e:
+            logger.warning(f"Whisper failed (likely no audio): {e}")
+            result = {"segments": []} # Fallback to empty segments
         
         # STAGE 3: Analysis/Scene Detection (50-65%)
         if progress_callback: await progress_callback(50, "Analyzing scenes & scoring...")
