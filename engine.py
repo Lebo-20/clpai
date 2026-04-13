@@ -29,9 +29,10 @@ class VideoEngine:
     @property
     def whisper_model(self):
         if self._whisper_model is None:
-            logger.info("Loading Whisper model...")
-            # Using 'base' for speed vs accuracy balance
-            self._whisper_model = whisper.load_model("base")
+            model_name = os.getenv("WHISPER_MODEL", "base")
+            device = os.getenv("WHISPER_DEVICE", "cpu")
+            logger.info(f"Loading Whisper model '{model_name}' on {device}...")
+            self._whisper_model = whisper.load_model(model_name, device=device)
         return self._whisper_model
 
     async def analyze_download_error_with_ai(self, error_log: str):
@@ -249,7 +250,10 @@ class VideoEngine:
         result = None
         try:
             # Whisper will crash if audio is empty or missing
-            result = await asyncio.to_thread(self.whisper_model.transcribe, input_path)
+            # Disable fp16 on CPU to avoid warnings and potential issues
+            device = os.getenv("WHISPER_DEVICE", "cpu")
+            use_fp16 = (device == "cuda")
+            result = await asyncio.to_thread(self.whisper_model.transcribe, input_path, fp16=use_fp16)
         except Exception as e:
             logger.warning(f"Whisper failed (likely no audio): {e}")
             result = {"segments": []} # Fallback to empty segments
