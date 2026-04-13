@@ -296,13 +296,26 @@ class VideoEngine:
             if do_subtitles:
                 s_path = os.path.join(output_folder, f"sub_{clip_name}")
                 srt_path = os.path.join(output_folder, f"sub_{i}.srt")
-                # Whisper specific clip subs
-                res = await asyncio.to_thread(self.whisper_model.transcribe, curr)
-                self._write_srt(res["segments"], srt_path)
-                escaped = srt_path.replace("\\", "/").replace(":", "\\:")
-                cmd = ['ffmpeg', '-y', '-i', curr, '-vf', f"subtitles='{escaped}':force_style='Alignment=2,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=3'", '-c:a', 'copy', s_path]
-                subprocess.run(cmd, check=True, capture_output=True)
-                curr = s_path
+                
+                # REUSE global transcribe result (much faster!)
+                clip_segments = []
+                for seg in result["segments"]:
+                    if seg['start'] >= start_t and seg['end'] <= end_t:
+                        # Normalize timestamps relative to clip start
+                        new_seg = seg.copy()
+                        new_seg['start'] -= start_t
+                        new_seg['end'] -= start_t
+                        clip_segments.append(new_seg)
+                
+                if clip_segments:
+                    self._write_srt(clip_segments, srt_path)
+                    escaped = srt_path.replace("\\", "/").replace(":", "\\:")
+                    # Increased font size and improved style for vertical videos
+                    cmd = ['ffmpeg', '-y', '-i', curr, '-vf', f"subtitles='{escaped}':force_style='Alignment=2,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2'", '-c:a', 'copy', s_path]
+                    subprocess.run(cmd, check=True, capture_output=True)
+                    curr = s_path
+                else:
+                    logger.info(f"No speech detected for clip {i+1}, skipping subtitles.")
 
             shutil.move(curr, final_path)
             final_files.append(final_path)
