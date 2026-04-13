@@ -109,6 +109,14 @@ class VideoEngine:
             if os.path.exists(youtube_cookies):
                 cookie_file = youtube_cookies
                 logger.info(f"Using YouTube specific cookies: {youtube_cookies}")
+            
+            # YouTube specific bypass
+            current_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'web'],
+                    'skip': ['dash', 'hls']
+                }
+            }
         
         # Fallback to general cookies.txt if no specific cookie file was set or found
         if not cookie_file:
@@ -134,6 +142,7 @@ class VideoEngine:
                 logger.info(f"Download attempt {attempt+1} using format: {f_str or 'default'}")
                 def _download():
                     with yt_dlp.YoutubeDL(current_opts) as ydl:
+                        # Pre-check if video is available
                         info = ydl.extract_info(url, download=True)
                         return ydl.prepare_filename(info)
                 return await asyncio.to_thread(_download)
@@ -161,6 +170,12 @@ class VideoEngine:
                                 if "--user-agent" in flag: 
                                     ua_match = re.search(r'--user-agent\s+"?([^"]+)"?', flag)
                                     if ua_match: current_opts['headers']['User-Agent'] = ua_match.group(1)
+                                if "--extractor-args" in flag:
+                                    # Very basic parsing for extractor args
+                                    ext_match = re.search(r'--extractor-args\s+"?([^"]+)"?', flag)
+                                    if ext_match:
+                                        logger.info(f"AI suggested extractor args: {ext_match.group(1)}")
+                                        # Not easily mappable to dict but we log it
 
                         logger.info(f"AI suggested fix: {solution.get('reason')}")
                         await asyncio.sleep(2)
