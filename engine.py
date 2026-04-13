@@ -343,13 +343,21 @@ class VideoEngine:
 
             # If Auto, we either use scene detect or fixed segments
             if mode == "auto":
-                # Regular intervals based on target_duration
-                curr = 0
-                while curr < duration_sec and len(clips_to_process) < 15:
-                    next_t = min(curr + target_duration, duration_sec)
-                    if next_t - curr > 2: # Ignore very short clips
-                        clips_to_process.append(((curr, next_t), f"clip_{len(clips_to_process)+1}"))
-                    curr = next_t
+                # Distribute clips across the entire video duration
+                max_clips = 15
+                # Calculate interval to spread clips evenly
+                step = duration_sec / max_clips
+                
+                for i in range(max_clips):
+                    start = i * step
+                    # Make sure the clip doesn't go over the total duration
+                    end = min(start + target_duration, duration_sec)
+                    
+                    if end - start > 2: # Ignore clips too short
+                        clips_to_process.append(((start, end), f"clip_{i+1}"))
+                    
+                    if end >= duration_sec:
+                        break
             else:
                 # Scene detection fallback
                 scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=int(fps)))
