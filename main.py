@@ -121,20 +121,34 @@ async def worker():
         try:
             logger.info(f"Processing job {job_id} for user {user_id}")
             
-            # STAGE 1: Download (0-30%)
-            await update_progress(5, "Downloading video...")
-            if input_type == "url":
+            if input_type == "full_download":
+                # STAGE 1: Full Download
+                await update_progress(5, "Downloading full video...")
                 input_path = await engine.download_video(input_data, job_id, options=options, progress_callback=update_progress)
+                
+                # STAGE 2: Direct Upload
+                job_active = False # Stop ticker
+                ticker_task.cancel()
+                
+                await update_progress(95, "Uploading full video...")
+                video = FSInputFile(input_path)
+                await bot.send_video(chat_id, video, caption=f"✅ **Download Selesai!**\n\nID: `{job_id}`", parse_mode="Markdown")
+                await update_progress(100, "Done!")
             else:
-                input_path = input_data
-            await update_progress(30, "Download complete.")
+                # STAGE 1: Download (0-30%)
+                await update_progress(5, "Downloading video...")
+                if input_type == "url":
+                    input_path = await engine.download_video(input_data, job_id, options=options, progress_callback=update_progress)
+                else:
+                    input_path = input_data
+                await update_progress(30, "Download complete.")
 
-            # STAGE 2-5: Processing (30-95%)
-            clips = await engine.create_clips(input_path, job_id, options, progress_callback=update_progress)
-            
-            # Stop ticker before uploading
-            job_active = False
-            ticker_task.cancel()
+                # STAGE 2-5: Processing (30-95%)
+                clips = await engine.create_clips(input_path, job_id, options, progress_callback=update_progress)
+                
+                # Stop ticker before uploading
+                job_active = False
+                ticker_task.cancel()
 
             # STAGE 6: Upload (95-100%)
             if clips:
@@ -244,6 +258,40 @@ async def toggle_vertical(message: Message):
     settings = get_user_settings(message.from_user.id)
     settings['vertical'] = not settings['vertical']
     await cmd_start(message)
+
+@dp.message(Command("l"))
+async def cmd_download_full(message: Message, command: CommandObject):
+    if not command.args:
+        return await message.answer("💡 **Cara penggunaan:** `/l [link]`\nContoh: `/l https://youtube.com/watch?v=...`", parse_mode="Markdown")
+        
+    url = command.args.strip()
+    wait_msg = await message.answer("📥 **Mempersiapkan download video penuh...**", parse_mode="Markdown")
+    
+    # We still use interactive selection for quality for full downloads
+    info = await engine.get_video_info(url)
+    if not info:
+        return await wait_msg.edit_text("❌ Gagal mengambil info video. Pastikan link benar.")
+        
+    # Build Quality Keyboard (same as clipping)
+    kb = InlineKeyboardBuilder()
+    for f in info['formats']:
+        kb.button(text=f"{f['height']}p ({f['ext']})", callback_data=f"sel_q_{f['id']}")
+    kb.button(text="Auto (Best)", callback_data="sel_q_best")
+    kb.adjust(2)
+    
+    # Store session but with type='full_download'
+    pending_sessions[message.from_user.id] = {
+        'url': url,
+        'info': info,
+        'msg_ids': [wait_msg.message_id, message.message_id],
+        'options': {'type': 'full_download', 'vertical': False, 'subtitles': False} # Defaults for full download
+    }
+    
+    await wait_msg.edit_text(
+        f"📥 **Link Full Download Terdeteksi!**\n🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas:",
+        reply_markup=kb.as_markup(),
+        parse_mode="Markdown"
+    )
 
 @dp.message(F.text == "💬 Toggle Subtitle")
 async def toggle_subs(message: Message):
@@ -372,11 +420,14 @@ async def finalize_link_selection(callback: CallbackQuery, lang_code: str):
         session['options']['subtitle_lang'] = lang_code
         session['options']['subtitles'] = True # Force burn subtitles if selected
     
+    # Check if it was a full download request
+    job_type = session['options'].get('type', 'url')
+    
     # Add to queue
     await queue.put({
         'user_id': user_id,
         'chat_id': callback.message.chat.id,
-        'type': 'url',
+        'type': job_type,
         'data': session['url'],
         'options': session['options']
     })
