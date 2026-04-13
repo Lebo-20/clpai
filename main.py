@@ -119,10 +119,16 @@ async def worker():
 
         # Background Ticker to make the timer "alive"
         async def ticker():
-            while job_active:
-                await asyncio.sleep(4) # Update every 4 seconds
-                if job_active:
-                    await update_progress(current_progress["p"], current_progress["stage"])
+            try:
+                while job_active:
+                    await asyncio.sleep(4) # Update every 4 seconds
+                    if job_active:
+                        await update_progress(current_progress["p"], current_progress["stage"])
+            except asyncio.CancelledError:
+                # Normal shutdown
+                pass
+            except Exception:
+                pass
 
         ticker_task = asyncio.create_task(ticker())
         input_path = None
@@ -182,10 +188,14 @@ async def worker():
             logger.error(f"Error in worker for job {job_id}: {e}")
             await bot.edit_message_text(text=f"❌ Job `{job_id}` gagal: {str(e)[:100]}", chat_id=chat_id, message_id=status_msg.message_id)
         finally:
-            # Matikan ticker
+            # Matikan ticker secara aman
             job_active = False
             if 'ticker_task' in locals():
                 ticker_task.cancel()
+                try:
+                    await asyncio.wait_for(ticker_task, timeout=1.0)
+                except:
+                    pass
                 
             if input_path:
                 await engine.cleanup(input_path)
