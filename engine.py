@@ -8,8 +8,10 @@ import json
 import re
 from scenedetect import detect, ContentDetector, AdaptiveDetector, split_video_ffmpeg
 import yt_dlp
-import whisper
 import google.generativeai as genai
+import cv2
+import numpy as np
+import whisper
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +234,50 @@ class VideoEngine:
         except Exception:
             return None
 
+    def _get_smart_crop_params(self, video_path, target_ratio=9/16):
+        """Returns the ffmpeg crop string centered on detected faces."""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return "ih*9/16:ih" # Fallback
+
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        target_w = int(h * target_ratio)
+        if target_w >= w:
+            cap.release()
+            return f"{w}:{h}" # No crop needed
+            
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        x_centers = []
+        
+        for pos in [0.3, 0.5, 0.7]:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total_frames * pos))
+            ret, frame = cap.read()
+            if not ret: continue
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) > 0:
+                # Sort by size to get the biggest face (likely the speaker)
+                faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                x, y, fw, fh = faces[0]
+                x_centers.append(x + fw/2)
+
+        cap.release()
+        
+        if not x_centers:
+            # Fallback to center
+            return f"ih*9/16:ih:(in_w-out_w)/2:0"
+            
+        avg_x = sum(x_centers) / len(x_centers)
+        x_offset = int(avg_x - (target_w / 2))
+        x_offset = max(0, min(x_offset, w - target_w))
+        
+        return f"{target_w}:{h}:{x_offset}:0"
+
     async def create_clips(self, input_path: str, job_id: str, options: dict, progress_callback=None):
         """Processes video into clips with granular progress reporting."""
         output_folder = os.path.join(self.temp_dir, f"{job_id}_clips")
@@ -294,7 +340,8 @@ class VideoEngine:
             curr = temp_path
             if do_vertical:
                 v_path = os.path.join(output_folder, f"v_{clip_name}")
-                subprocess.run(['ffmpeg', '-y', '-i', curr, '-vf', 'crop=ih*9/16:ih', '-c:a', 'copy', v_path], check=True, capture_output=True)
+                crop_params = await asyncio.to_thread(self._get_smart_crop_params, curr)
+                subprocess.run(['ffmpeg', '-y', '-i', curr, '-vf', f"crop={crop_params}", '-c:a', 'copy', v_path], check=True, capture_output=True)
                 curr = v_path
 
             if do_subtitles:
