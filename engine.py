@@ -79,6 +79,7 @@ class VideoEngine:
             'quiet': True,
             'no_warnings': True,
             'cookiefile': cookies if os.path.exists(cookies) else None,
+            'socket_timeout': 30, # Increase timeout to 30s
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'ios', 'web'],
@@ -161,7 +162,8 @@ class VideoEngine:
             'nocheckcertificate': True,
             'ignoreerrors': False,
             'noplaylist': True,
-            'retries': 10,
+            'retries': 15,
+            'socket_timeout': 60, # 60 seconds for actual download
             'progress_hooks': [yt_dlp_hook],
             'headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
