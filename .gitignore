@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Project Specific
+temp/
+cookies.txt
+cookies_tiktok.txt
+cookies_youtube.txt
+.env
+
+# Others
+.DS_Store
