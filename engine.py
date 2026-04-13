@@ -70,16 +70,44 @@ class VideoEngine:
         except Exception:
             return None
 
+    def _get_cookie_file(self, url):
+        """Helper to find the most appropriate cookie file for a URL."""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Site-specific mapping
+        site_cookie_map = {
+            "youtube.com": "cookies_youtube.txt",
+            "youtu.be": "cookies_youtube.txt",
+            "tiktok.com": "cookies_tiktok.txt",
+            "facebook.com": "cookies_facebook.txt",
+            "fb.watch": "cookies_facebook.txt",
+            "instagram.com": "cookies_instagram.txt",
+            "twitter.com": "cookies_twitter.txt",
+            "x.com": "cookies_twitter.txt"
+        }
+
+        # Check for site-specific first
+        for domain, filename in site_cookie_map.items():
+            if domain in url:
+                path = os.path.join(base_dir, filename)
+                if os.path.exists(path):
+                    return path
+        
+        # Fallback to general cookies.txt
+        general = os.path.join(base_dir, "cookies.txt")
+        if os.path.exists(general):
+            return general
+        return None
+
     async def get_video_info(self, url: str):
         """Extracts available formats and subtitles for a given URL."""
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        cookies = os.path.join(base_dir, "cookies.txt")
+        cookie_file = self._get_cookie_file(url)
         
         opts = {
             'quiet': True,
             'no_warnings': True,
-            'cookiefile': cookies if os.path.exists(cookies) else None,
-            'socket_timeout': 30, # Increase timeout to 30s
+            'cookiefile': cookie_file,
+            'socket_timeout': 30,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'ios', 'web'],
@@ -204,28 +232,7 @@ class VideoEngine:
             current_opts['subtitleslangs'] = [target_lang]
 
         # Load site-specific cookies
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        cookie_file = None
-
-        # Comprehensive site-specific cookie mapping
-        site_cookie_map = {
-            "youtube.com": "cookies_youtube.txt",
-            "youtu.be": "cookies_youtube.txt",
-            "tiktok.com": "cookies_tiktok.txt",
-            "facebook.com": "cookies_facebook.txt",
-            "fb.watch": "cookies_facebook.txt",
-            "instagram.com": "cookies_instagram.txt",
-            "twitter.com": "cookies_twitter.txt",
-            "x.com": "cookies_twitter.txt"
-        }
-
-        for domain, filename in site_cookie_map.items():
-            if domain in url:
-                path = os.path.join(base_dir, filename)
-                if os.path.exists(path):
-                    cookie_file = path
-                    logger.info(f"Using site-specific cookies for {domain}: {filename}")
-                    break
+        cookie_file = self._get_cookie_file(url)
         
         # Site-specific optimized arguments
         if "youtube.com" in url or "youtu.be" in url:
@@ -236,15 +243,9 @@ class VideoEngine:
                 }
             }
         
-        # Fallback to general cookies.txt if no specific cookie file was set or found
-        if not cookie_file:
-            general_cookies = os.path.join(base_dir, "cookies.txt")
-            if os.path.exists(general_cookies):
-                cookie_file = general_cookies
-                logger.info(f"Using general cookies.txt fallback")
-        
         if cookie_file:
             current_opts['cookiefile'] = cookie_file
+            logger.info(f"Using cookie file: {os.path.basename(cookie_file)}")
         else:
             logger.warning("No cookie file found! Download might fail for restricted videos.")
 
