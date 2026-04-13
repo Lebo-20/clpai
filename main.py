@@ -267,24 +267,42 @@ async def handle_document(message: Message):
         return await message.answer("🚫 Fitur ini hanya untuk admin.")
         
     doc = message.document
+    file_name = doc.file_name.lower()
     valid_cookies = ["cookies.txt", "cookies_tiktok.txt", "cookies_youtube.txt"]
     
-    if doc.file_name in valid_cookies:
-        await bot.download_file((await bot.get_file(doc.file_id)).file_path, doc.file_name)
-        await message.answer(f"✅ **{doc.file_name}** berhasil diperbarui dan dipisahkan sesuai platform!", parse_mode="Markdown")
+    # Standardize filename to lowercase for internal use
+    target_name = None
+    for vc in valid_cookies:
+        if file_name == vc:
+            target_name = vc
+            break
+            
+    if target_name:
+        await bot.download_file((await bot.get_file(doc.file_id)).file_path, target_name)
+        await message.answer(f"✅ **{target_name}** berhasil diperbarui dan aktif!", parse_mode="Markdown")
     else:
-        await message.answer(f"📦 File `{doc.file_name}` diterima, tapi sistem hanya memproses file cookies (`cookies.txt`, `cookies_tiktok.txt`, `cookies_youtube.txt`).", parse_mode="Markdown")
+        await message.answer(f"📦 File `{doc.file_name}` diterima, tapi sistem hanya memproses file cookies: `cookies.txt`, `cookies_tiktok.txt`, or `cookies_youtube.txt`.", parse_mode="Markdown")
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("🚫 Maaf, Anda bukan admin.")
         
+    # Check for cookie files
+    cookie_status = []
+    for cf in ["cookies.txt", "cookies_tiktok.txt", "cookies_youtube.txt"]:
+        if os.path.exists(cf):
+            size = os.path.getsize(cf) / 1024
+            cookie_status.append(f"✅ `{cf}` ({size:.1f} KB)")
+        else:
+            cookie_status.append(f"❌ `{cf}` (Missing)")
+
     stats = (
         "📊 **Admin Statistics**\n\n"
         f"🔹 Antrean Aktif: `{queue.qsize()}`\n"
         f"🔹 Temp Folder: `{TEMP_DIR}`\n"
-        f"🔹 Registered Admins: `{len(ADMIN_IDS)}`"
+        f"🔹 Registered Admins: `{len(ADMIN_IDS)}`\n\n"
+        "🍪 **Cookie Files Status:**\n" + "\n".join(cookie_status)
     )
     await message.answer(stats)
 

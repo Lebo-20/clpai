@@ -86,20 +86,41 @@ class VideoEngine:
             'nocheckcertificate': True,
             'ignoreerrors': False,
             'noplaylist': True,
-            'retries': 5,
+            'retries': 10,
+            'headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Sec-Fetch-Mode': 'navigate',
+            }
         }
 
         # Load site-specific cookies
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cookie_file = None
+
         if "tiktok.com" in url:
-            tiktok_cookies = os.path.join(os.path.dirname(__file__), "cookies_tiktok.txt")
+            tiktok_cookies = os.path.join(base_dir, "cookies_tiktok.txt")
             if os.path.exists(tiktok_cookies):
-                current_opts['cookiefile'] = tiktok_cookies
-                logger.info("Using TikTok specific cookies.")
+                cookie_file = tiktok_cookies
+                logger.info(f"Using TikTok specific cookies: {tiktok_cookies}")
         elif "youtube.com" in url or "youtu.be" in url:
-            youtube_cookies = os.path.join(os.path.dirname(__file__), "cookies_youtube.txt")
+            youtube_cookies = os.path.join(base_dir, "cookies_youtube.txt")
             if os.path.exists(youtube_cookies):
-                current_opts['cookiefile'] = youtube_cookies
-                logger.info("Using YouTube specific cookies.")
+                cookie_file = youtube_cookies
+                logger.info(f"Using YouTube specific cookies: {youtube_cookies}")
+        
+        # Fallback to general cookies.txt if no specific cookie file was set or found
+        if not cookie_file:
+            general_cookies = os.path.join(base_dir, "cookies.txt")
+            if os.path.exists(general_cookies):
+                cookie_file = general_cookies
+                logger.info(f"Using general cookies.txt fallback: {general_cookies}")
+        
+        if cookie_file:
+            current_opts['cookiefile'] = cookie_file
+        else:
+            logger.warning("No cookie file found! Download might fail for restricted videos.")
 
         max_attempts = len(format_fallbacks)
         for attempt in range(max_attempts):
@@ -126,18 +147,32 @@ class VideoEngine:
                     if attempt < max_attempts - 1:
                         continue
                 
-                # If it's a cookie/login error, AI might suggest something
+                # AI search for fix
                 if attempt < max_attempts - 1:
                     solution = await self.analyze_download_error_with_ai(err_log)
                     if solution and "fix" in solution:
-                        # Apply fix and retry
                         fix = solution["fix"]
-                        if fix.get("format"): current_opts['format'] = fix['format']
-                        await asyncio.sleep(1)
+                        if fix.get("format"): 
+                            current_opts['format'] = fix['format']
+                        if fix.get("additional_flags"):
+                            # Map some common flags to opts if possible
+                            for flag in fix["additional_flags"]:
+                                if "--geo-bypass" in flag: current_opts['geo_bypass'] = True
+                                if "--user-agent" in flag: 
+                                    ua_match = re.search(r'--user-agent\s+"?([^"]+)"?', flag)
+                                    if ua_match: current_opts['headers']['User-Agent'] = ua_match.group(1)
+
+                        logger.info(f"AI suggested fix: {solution.get('reason')}")
+                        await asyncio.sleep(2)
                         continue
                 
                 if attempt == max_attempts - 1:
-                    raise Exception(f"Gagal mendownload video setelah semua percobaan. Kemungkinan besar video diblokir atau butuh cookies_youtube.txt.")
+                    error_msg = f"Gagal mendownload video setelah {max_attempts} percobaan. "
+                    if "cookies" in err_log.lower() or "login" in err_log.lower() or "sign in" in err_log.lower():
+                        error_msg += "Video ini butuh login. Update cookies.txt via Telegram."
+                    else:
+                        error_msg += "Kemungkinan video diblokir, private, atau butuh cookies terbaru."
+                    raise Exception(error_msg)
 
     async def analyze_with_gemini(self, transcript_segments: list):
         """Uses Gemini AI to find the most viral segments based on transcript with scoring."""
