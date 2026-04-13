@@ -122,6 +122,33 @@ class VideoEngine:
             logger.error(f"Error fetching video info: {e}")
             return None
 
+    def get_video_duration(self, video_path):
+        """Returns video duration in seconds using ffprobe."""
+        try:
+            cmd = [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', video_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            return float(result.stdout.strip())
+        except:
+            return 0
+
+    def validate_video(self, video_path):
+        """Checks if video exists, is not empty, and has duration."""
+        if not os.path.exists(video_path):
+            raise Exception("File video tidak ditemukan setelah download.")
+        
+        size_kb = os.path.getsize(video_path) / 1024
+        if size_kb < 10: # Minimum 10KB
+            raise Exception(f"File video corrupt atau kosong (Size: {size_kb:.1f} KB).")
+        
+        duration = self.get_video_duration(video_path)
+        if duration <= 0:
+            raise Exception("Video tidak memiliki durasi (Corrupt file atau format tidak didukung).")
+            
+        return duration
+
     async def download_video(self, url: str, job_id: str, options: dict = {}, progress_callback=None) -> str:
         """Downloads video with AI-powered self-healing and specific format fallback logic."""
         output_template = os.path.join(self.temp_dir, f"{job_id}_input.%(ext)s")
@@ -226,7 +253,10 @@ class VideoEngine:
                         # Pre-check if video is available
                         info = ydl.extract_info(url, download=True)
                         return ydl.prepare_filename(info)
-                return await asyncio.to_thread(_download)
+                path = await asyncio.to_thread(_download)
+                # Final validation
+                self.validate_video(path)
+                return path
 
             except Exception as e:
                 err_log = str(e)
@@ -368,6 +398,9 @@ class VideoEngine:
         do_vertical = options.get("vertical", True)
         target_duration = options.get("duration", 60)
         
+        # PRE-VALIDATION before heavy processing
+        video_duration = await asyncio.to_thread(self.validate_video, input_path)
+        
         clips_to_process = []
 
         # STAGE 2: Transcribe (30-50%)
@@ -391,42 +424,35 @@ class VideoEngine:
             ai_segments = await self.analyze_with_gemini(result["segments"])
             if ai_segments:
                 for seg in ai_segments[:15]:
-                    # Respect maximum duration from settings
-                    start = seg['start']
-                    end = min(seg['end'], start + target_duration)
+                    # Respect maximum duration from settings and video limit
+                    start = min(seg['start'], video_duration)
+                    end = min(seg['end'], start + target_duration, video_duration)
                     clips_to_process.append(((start, end), seg['title']))
 
         if not clips_to_process:
-            # Enforce duration in Auto mode
-            cap = cv2.VideoCapture(input_path)
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration_sec = total_frames / fps
-            cap.release()
-
             # If Auto, we either use scene detect or fixed segments
             if mode == "auto":
                 # Distribute clips across the entire video duration
                 max_clips = 15
                 # Calculate interval to spread clips evenly
-                step = duration_sec / max_clips
+                step = video_duration / max_clips
                 
                 for i in range(max_clips):
                     start = i * step
                     # Make sure the clip doesn't go over the total duration
-                    end = min(start + target_duration, duration_sec)
+                    end = min(start + target_duration, video_duration)
                     
                     if end - start > 2: # Ignore clips too short
                         clips_to_process.append(((start, end), f"clip_{i+1}"))
                     
-                    if end >= duration_sec:
+                    if end >= video_duration:
                         break
             else:
                 # Scene detection fallback
-                scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=int(fps)))
+                scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=30))
                 for i, scene in enumerate(scene_list[:15]):
-                    start = scene[0].get_seconds()
-                    end = min(scene[1].get_seconds(), start + target_duration)
+                    start = min(scene[0].get_seconds(), video_duration)
+                    end = min(scene[1].get_seconds(), start + target_duration, video_duration)
                     clips_to_process.append(((start, end), f"clip_{i+1}"))
 
         # STAGE 4: Rendering (65-95%)
