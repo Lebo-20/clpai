@@ -169,12 +169,30 @@ class VideoEngine:
                 err_log = str(e)
                 logger.warning(f"Attempt {attempt+1} failed: {err_log[:80]}...")
                 
+                # Check for explicit authentication/restriction errors
+                auth_errors = [
+                    "Sign in to confirm your age",
+                    "This video is private",
+                    "confirm you're not a bot"
+                ]
+                if any(x.lower() in err_log.lower() for x in auth_errors):
+                    error_msg = f"❌ Akses Ditolak: Video ini butuh login valid. "
+                    if "age" in err_log.lower():
+                        error_msg += "Video ini dibatasi umur (Age Restricted)."
+                    elif "private" in err_log.lower():
+                        error_msg += "Video ini bersifat Private."
+                    else:
+                        error_msg += "Terdeteksi verifikasi bot."
+                    
+                    error_msg += "\n\nSilakan update `cookies.txt` via Telegram untuk melanjutkan."
+                    raise Exception(error_msg)
+
                 # If it's a format error, continue to next fallback
                 if any(x in err_log for x in ["Requested format is not available", "format is not available"]):
                     if attempt < max_attempts - 1:
                         continue
                 
-                # AI search for fix
+                # AI search for fix (Only for non-auth errors)
                 if attempt < max_attempts - 1:
                     solution = await self.analyze_download_error_with_ai(err_log)
                     if solution and "fix" in solution:
@@ -189,11 +207,9 @@ class VideoEngine:
                                     ua_match = re.search(r'--user-agent\s+"?([^"]+)"?', flag)
                                     if ua_match: current_opts['headers']['User-Agent'] = ua_match.group(1)
                                 if "--extractor-args" in flag:
-                                    # Very basic parsing for extractor args
                                     ext_match = re.search(r'--extractor-args\s+"?([^"]+)"?', flag)
                                     if ext_match:
                                         logger.info(f"AI suggested extractor args: {ext_match.group(1)}")
-                                        # Not easily mappable to dict but we log it
 
                         logger.info(f"AI suggested fix: {solution.get('reason')}")
                         await asyncio.sleep(2)
