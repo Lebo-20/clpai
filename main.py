@@ -82,32 +82,40 @@ async def worker():
 
         current_progress = {"p": 5, "stage": "Menghubungkan..."}
         job_active = True
+        last_update_time = [0]
+        update_lock = asyncio.Lock()
 
-        async def update_progress(percentage, stage_msg):
+        async def update_progress(percentage, stage_msg, force=False):
             current_progress["p"] = percentage
             current_progress["stage"] = stage_msg
             
             now = datetime.now()
             elapsed = (now - job_start_time).total_seconds()
             
-            eta_str = "Calculating..."
-            if percentage > 0.5: # Only show ETA after some progress
-                total_est = elapsed / (percentage / 100)
-                remaining = total_est - elapsed
-                eta_str = format_duration(remaining)
+            # Rate limit: max once every 2.5 seconds, unless forced
+            now_ts = now.timestamp()
+            if not force and now_ts - last_update_time[0] < 2.5:
+                return
             
-            progress_text = (
-                f"🚀 **Processing Job**: `{job_id}`\n"
-                f"📊 Stage: `{stage_msg}`\n\n"
-                f"{get_progress_bar(percentage)}\n"
-                f"⏱ Elapsed: {format_duration(elapsed)}\n"
-                f"⏳ ETA: {eta_str}"
-            )
-            try:
-                # Update but not too fast to avoid 429
-                await bot.edit_message_text(text=progress_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
-            except Exception:
-                pass
+            async with update_lock:
+                last_update_time[0] = now_ts
+                eta_str = "Calculating..."
+                if percentage > 0.5: # Only show ETA after some progress
+                    total_est = elapsed / (percentage / 100)
+                    remaining = total_est - elapsed
+                    eta_str = format_duration(remaining)
+                
+                progress_text = (
+                    f"🚀 **Processing Job**: `{job_id}`\n"
+                    f"📊 Stage: `{stage_msg}`\n\n"
+                    f"{get_progress_bar(percentage)}\n"
+                    f"⏱ Elapsed: {format_duration(elapsed)}\n"
+                    f"⏳ ETA: {eta_str}"
+                )
+                try:
+                    await bot.edit_message_text(text=progress_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
+                except Exception:
+                    pass
 
         # Background Ticker to make the timer "alive"
         async def ticker():
