@@ -207,18 +207,28 @@ class VideoEngine:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         cookie_file = None
 
-        if "tiktok.com" in url:
-            tiktok_cookies = os.path.join(base_dir, "cookies_tiktok.txt")
-            if os.path.exists(tiktok_cookies):
-                cookie_file = tiktok_cookies
-                logger.info(f"Using TikTok specific cookies: {tiktok_cookies}")
-        elif "youtube.com" in url or "youtu.be" in url:
-            youtube_cookies = os.path.join(base_dir, "cookies_youtube.txt")
-            if os.path.exists(youtube_cookies):
-                cookie_file = youtube_cookies
-                logger.info(f"Using YouTube specific cookies: {youtube_cookies}")
-            
-            # YouTube specific bypass
+        # Comprehensive site-specific cookie mapping
+        site_cookie_map = {
+            "youtube.com": "cookies_youtube.txt",
+            "youtu.be": "cookies_youtube.txt",
+            "tiktok.com": "cookies_tiktok.txt",
+            "facebook.com": "cookies_facebook.txt",
+            "fb.watch": "cookies_facebook.txt",
+            "instagram.com": "cookies_instagram.txt",
+            "twitter.com": "cookies_twitter.txt",
+            "x.com": "cookies_twitter.txt"
+        }
+
+        for domain, filename in site_cookie_map.items():
+            if domain in url:
+                path = os.path.join(base_dir, filename)
+                if os.path.exists(path):
+                    cookie_file = path
+                    logger.info(f"Using site-specific cookies for {domain}: {filename}")
+                    break
+        
+        # Site-specific optimized arguments
+        if "youtube.com" in url or "youtu.be" in url:
             current_opts['extractor_args'] = {
                 'youtube': {
                     'player_client': ['android', 'ios', 'web'],
@@ -231,7 +241,7 @@ class VideoEngine:
             general_cookies = os.path.join(base_dir, "cookies.txt")
             if os.path.exists(general_cookies):
                 cookie_file = general_cookies
-                logger.info(f"Using general cookies.txt fallback: {general_cookies}")
+                logger.info(f"Using general cookies.txt fallback")
         
         if cookie_file:
             current_opts['cookiefile'] = cookie_file

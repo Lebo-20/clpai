@@ -476,7 +476,10 @@ async def handle_document(message: Message):
         
     doc = message.document
     file_name = doc.file_name.lower()
-    valid_cookies = ["cookies.txt", "cookies_tiktok.txt", "cookies_youtube.txt"]
+    valid_cookies = [
+        "cookies.txt", "cookies_tiktok.txt", "cookies_youtube.txt",
+        "cookies_facebook.txt", "cookies_instagram.txt", "cookies_twitter.txt"
+    ]
     
     # Standardize filename to lowercase for internal use
     target_name = None
@@ -512,7 +515,11 @@ async def cmd_admin(message: Message):
         
     # Check for cookie files
     cookie_status = []
-    for cf in ["cookies.txt", "cookies_tiktok.txt", "cookies_youtube.txt"]:
+    monitored_cookies = [
+        "cookies.txt", "cookies_youtube.txt", "cookies_tiktok.txt",
+        "cookies_facebook.txt", "cookies_instagram.txt", "cookies_twitter.txt"
+    ]
+    for cf in monitored_cookies:
         if os.path.exists(cf):
             size = os.path.getsize(cf) / 1024
             cookie_status.append(f"✅ `{cf}` ({size:.1f} KB)")
