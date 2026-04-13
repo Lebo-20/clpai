@@ -287,6 +287,7 @@ class VideoEngine:
         mode = options.get("mode", "auto")
         do_subtitles = options.get("subtitles", False)
         do_vertical = options.get("vertical", True)
+        target_duration = options.get("duration", 60)
         
         clips_to_process = []
 
@@ -311,12 +312,35 @@ class VideoEngine:
             ai_segments = await self.analyze_with_gemini(result["segments"])
             if ai_segments:
                 for seg in ai_segments[:15]:
-                    clips_to_process.append(((seg['start'], seg['end']), seg['title']))
+                    # Respect maximum duration from settings
+                    start = seg['start']
+                    end = min(seg['end'], start + target_duration)
+                    clips_to_process.append(((start, end), seg['title']))
 
         if not clips_to_process:
-            scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=30))
-            for i, scene in enumerate(scene_list[:15]):
-                clips_to_process.append(((scene[0].get_seconds(), scene[1].get_seconds()), f"clip_{i+1}"))
+            # Enforce duration in Auto mode
+            cap = cv2.VideoCapture(input_path)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration_sec = total_frames / fps
+            cap.release()
+
+            # If Auto, we either use scene detect or fixed segments
+            if mode == "auto":
+                # Regular intervals based on target_duration
+                curr = 0
+                while curr < duration_sec and len(clips_to_process) < 15:
+                    next_t = min(curr + target_duration, duration_sec)
+                    if next_t - curr > 2: # Ignore very short clips
+                        clips_to_process.append(((curr, next_t), f"clip_{len(clips_to_process)+1}"))
+                    curr = next_t
+            else:
+                # Scene detection fallback
+                scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=int(fps)))
+                for i, scene in enumerate(scene_list[:15]):
+                    start = scene[0].get_seconds()
+                    end = min(scene[1].get_seconds(), start + target_duration)
+                    clips_to_process.append(((start, end), f"clip_{i+1}"))
 
         # STAGE 4: Rendering (65-95%)
         final_files = []
