@@ -124,7 +124,7 @@ async def worker():
             # STAGE 1: Download (0-30%)
             await update_progress(5, "Downloading video...")
             if input_type == "url":
-                input_path = await engine.download_video(input_data, job_id, progress_callback=update_progress)
+                input_path = await engine.download_video(input_data, job_id, options=options, progress_callback=update_progress)
             else:
                 input_path = input_data
             await update_progress(30, "Download complete.")
@@ -292,20 +292,113 @@ async def handle_video(message: Message):
     
     await bot.edit_message_text(text=f"✅ Video masuk antrean. Posisi: {queue.qsize()}", chat_id=message.chat.id, message_id=wait_msg.message_id)
 
+# Session tracking for interactive selections
+pending_sessions = {}
+
 @dp.message(F.text.regexp(r'^https?://'))
 async def handle_link(message: Message):
-    wait_msg = await message.answer("🔗 Link terdeteksi! Menambahkan ke antrean...")
+    url = message.text.strip()
+    wait_msg = await message.answer("🔍 **Menganalisa video...** Mohon tunggu.", parse_mode="Markdown")
     
-    settings = get_user_settings(message.from_user.id).copy()
+    info = await engine.get_video_info(url)
+    if not info:
+        return await wait_msg.edit_text("❌ Gagal mengambil info video. Pastikan link benar atau coba lagi nanti.")
+    
+    # Build Quality Keyboard
+    kb = InlineKeyboardBuilder()
+    for f in info['formats']:
+        kb.button(text=f"{f['height']}p ({f['ext']})", callback_data=f"sel_q_{f['id']}")
+    kb.button(text="Auto (Best)", callback_data="sel_q_best")
+    kb.adjust(2)
+    
+    pending_sessions[message.from_user.id] = {
+        'url': url,
+        'info': info,
+        'msg_ids': [wait_msg.message_id, message.message_id],
+        'options': get_user_settings(message.from_user.id).copy()
+    }
+    
+    await wait_msg.edit_text(
+        f"🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas video:",
+        reply_markup=kb.as_markup(),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(lambda c: c.data.startswith("sel_q_"))
+async def process_quality_selection(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in pending_sessions:
+        return await callback.answer("Sesi kadaluarsa. Silakan kirim ulang link.", show_alert=True)
+    
+    quality_id = callback.data.replace("sel_q_", "")
+    session = pending_sessions[user_id]
+    session['options']['format_id'] = None if quality_id == "best" else quality_id
+    
+    # Check for subtitles
+    info = session['info']
+    if info.get('subtitles'):
+        kb = InlineKeyboardBuilder()
+        # Only show first 10 languages
+        count = 0
+        for code, name in info['subtitles'].items():
+            kb.button(text=name[:15], callback_data=f"sel_s_{code}")
+            count += 1
+            if count >= 10: break
+            
+        kb.button(text="❌ Tanpa Subtitle", callback_data="sel_s_none")
+        kb.adjust(2)
+        
+        await callback.message.edit_text(
+            f"🌐 **Subtitles Terdeteksi!**\n\nPilih bahasa subtitle yang ingin digunakan (opsional):",
+            reply_markup=kb.as_markup(),
+            parse_mode="Markdown"
+        )
+    else:
+        # No subtitles, jump to queue
+        await finalize_link_selection(callback, "none")
+
+@dp.callback_query(lambda c: c.data.startswith("sel_s_"))
+async def process_subtitle_selection(callback: CallbackQuery):
+    lang_code = callback.data.replace("sel_s_", "")
+    await finalize_link_selection(callback, lang_code)
+
+async def finalize_link_selection(callback: CallbackQuery, lang_code: str):
+    user_id = callback.from_user.id
+    if user_id not in pending_sessions:
+        return await callback.answer("Sesi kadaluarsa.", show_alert=True)
+        
+    session = pending_sessions[user_id]
+    if lang_code != "none":
+        session['options']['subtitle_lang'] = lang_code
+        session['options']['subtitles'] = True # Force burn subtitles if selected
+    
+    # Add to queue
     await queue.put({
-        'user_id': message.from_user.id,
-        'chat_id': message.chat.id,
+        'user_id': user_id,
+        'chat_id': callback.message.chat.id,
         'type': 'url',
-        'data': message.text,
-        'options': settings
+        'data': session['url'],
+        'options': session['options']
     })
     
-    await bot.edit_message_text(text=f"✅ Link masuk antrean. Posisi: {queue.qsize()}", chat_id=message.chat.id, message_id=wait_msg.message_id)
+    # Success message
+    await callback.message.edit_text(f"✅ Link masuk antrean! Posisi: {queue.qsize()}")
+    
+    # Ephemeral: Cleanup after 5 seconds
+    async def cleanup():
+        await asyncio.sleep(5)
+        try:
+            # Delete selection message
+            await callback.message.delete()
+            # Delete user's original link message
+            for mid in session['msg_ids']:
+                try: await bot.delete_message(callback.message.chat.id, mid)
+                except: pass
+        except: pass
+        finally:
+            pending_sessions.pop(user_id, None)
+
+    asyncio.create_task(cleanup())
 
 @dp.message(F.document)
 async def handle_document(message: Message):

@@ -70,9 +70,63 @@ class VideoEngine:
         except Exception:
             return None
 
-    async def download_video(self, url: str, job_id: str, progress_callback=None) -> str:
+    async def get_video_info(self, url: str):
+        """Extracts available formats and subtitles for a given URL."""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cookies = os.path.join(base_dir, "cookies.txt")
+        
+        opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'cookiefile': cookies if os.path.exists(cookies) else None,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'web'],
+                }
+            }
+        }
+        
+        def _extract():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+                
+        try:
+            info = await asyncio.to_thread(_extract)
+            
+            # Formats
+            formats = []
+            seen_heights = set()
+            for f in sorted(info.get('formats', []), key=lambda x: (x.get('height', 0) or 0), reverse=True):
+                h = f.get('height')
+                if h and h >= 360 and h <= 1080 and h not in seen_heights:
+                    formats.append({'id': f.get('format_id'), 'height': h, 'ext': f.get('ext')})
+                    seen_heights.add(h)
+            
+            # Subtitles
+            subtitles = {}
+            if 'subtitles' in info:
+                for lang, data in info['subtitles'].items():
+                    subtitles[lang] = lang
+            if 'automatic_captions' in info:
+                for lang, data in info['automatic_captions'].items():
+                    if lang not in subtitles:
+                        subtitles[lang] = f"{lang} (auto)"
+                        
+            return {
+                'title': info.get('title'),
+                'formats': formats[:6],
+                'subtitles': subtitles
+            }
+        except Exception as e:
+            logger.error(f"Error fetching video info: {e}")
+            return None
+
+    async def download_video(self, url: str, job_id: str, options: dict = {}, progress_callback=None) -> str:
         """Downloads video with AI-powered self-healing and specific format fallback logic."""
         output_template = os.path.join(self.temp_dir, f"{job_id}_input.%(ext)s")
+        
+        target_format = options.get('format_id')
+        target_lang = options.get('subtitle_lang')
         
         def yt_dlp_hook(d):
             if d['status'] == 'downloading':
@@ -88,14 +142,18 @@ class VideoEngine:
                 except Exception:
                     pass
 
-        # Sequence of formats: User-suggested high-compatibility string is now primary
+        # Sequence of formats
         format_fallbacks = [
             "(bv*+ba/b/bv+ba/best)",
             'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'best',
-            None # Default fallback
+            None
         ]
         
+        # If user picked a specific format, we put it first
+        if target_format:
+            format_fallbacks.insert(0, f"{target_format}+bestaudio/best")
+
         current_opts = {
             'outtmpl': output_template,
             'quiet': True,
@@ -109,9 +167,12 @@ class VideoEngine:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Sec-Fetch-Mode': 'navigate',
             }
         }
+        
+        if target_lang:
+            current_opts['writesubtitles'] = True
+            current_opts['subtitleslangs'] = [target_lang]
 
         # Load site-specific cookies
         base_dir = os.path.dirname(os.path.abspath(__file__))
