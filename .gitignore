@@ -1,16 +1,20 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-.venv/
+# Environtment Variables
+.env
 
-# Project Specific
-temp/
+# Cookies (Authentication)
 cookies.txt
 cookies_tiktok.txt
 cookies_youtube.txt
-.env
 
-# Others
+# Directories
+temp/
+venv/
+__pycache__/
+
+# Python
+*.pyc
+.ipynb_checkpoints/
+
+# System Files
 .DS_Store
+Thumbs.db
