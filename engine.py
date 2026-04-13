@@ -401,8 +401,16 @@ class VideoEngine:
                 if clip_segments:
                     self._write_srt(clip_segments, srt_path)
                     escaped = srt_path.replace("\\", "/").replace(":", "\\:")
-                    # Increased font size and improved style for vertical videos
-                    cmd = ['ffmpeg', '-y', '-i', curr, '-vf', f"subtitles='{escaped}':force_style='Alignment=2,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2'", '-c:a', 'copy', s_path]
+                    
+                    # Custom styling based on orientation (Vertical vs Horizontal)
+                    if do_vertical:
+                        # Style for Vertical: Standard Symbols PS, Size 10, Bold, Outline 1, MarginV 90
+                        style = "Fontname=Standard Symbols PS,PrimaryColour=&HFFFFFF,SecondaryColour=&H000000,OutlineColour=&H000000,BorderStyle=1,Outline=1,Shadow=0,Alignment=2,FontSize=10,Bold=1,MarginV=90"
+                    else:
+                        # Style for Horizontal: Nimbus Sans Narrow, Size 24, MarginV 8
+                        style = "Fontname=Nimbus Sans Narrow,PrimaryColour=&HFFFFFF,SecondaryColour=&H000000,OutlineColour=&H000000,BorderStyle=1,Outline=1,Shadow=0,Alignment=2,FontSize=24,Bold=0,MarginV=8"
+                    
+                    cmd = ['ffmpeg', '-y', '-i', curr, '-vf', f"subtitles='{escaped}':force_style='{style}'", '-c:a', 'copy', s_path]
                     subprocess.run(cmd, check=True, capture_output=True)
                     curr = s_path
                 else:
