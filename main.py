@@ -80,7 +80,13 @@ async def worker():
         # Initial status message
         status_msg = await bot.send_message(chat_id, f"📡 **Job `{job_id}`**: Menghubungkan ke server...")
 
+        current_progress = {"p": 5, "stage": "Menghubungkan..."}
+        job_active = True
+
         async def update_progress(percentage, stage_msg):
+            current_progress["p"] = percentage
+            current_progress["stage"] = stage_msg
+            
             now = datetime.now()
             elapsed = (now - job_start_time).total_seconds()
             
@@ -103,6 +109,14 @@ async def worker():
             except Exception:
                 pass
 
+        # Background Ticker to make the timer "alive"
+        async def ticker():
+            while job_active:
+                await asyncio.sleep(4) # Update every 4 seconds
+                if job_active:
+                    await update_progress(current_progress["p"], current_progress["stage"])
+
+        ticker_task = asyncio.create_task(ticker())
         input_path = None
         try:
             logger.info(f"Processing job {job_id} for user {user_id}")
@@ -117,6 +131,10 @@ async def worker():
 
             # STAGE 2-5: Processing (30-95%)
             clips = await engine.create_clips(input_path, job_id, options, progress_callback=update_progress)
+            
+            # Stop ticker before uploading
+            job_active = False
+            ticker_task.cancel()
 
             # STAGE 6: Upload (95-100%)
             if clips:
@@ -142,8 +160,15 @@ async def worker():
             logger.error(f"Error in worker for job {job_id}: {e}")
             await bot.edit_message_text(text=f"❌ Job `{job_id}` gagal: {str(e)[:100]}", chat_id=chat_id, message_id=status_msg.message_id)
         finally:
+            # Matikan ticker
+            job_active = False
+            if 'ticker_task' in locals():
+                ticker_task.cancel()
+                
             if input_path:
                 await engine.cleanup(input_path)
+            if 'clips' in locals() and clips:
+                await engine.cleanup(os.path.dirname(clips[0]))
             queue.task_done()
             logger.info(f"Finished job {job_id}")
 
