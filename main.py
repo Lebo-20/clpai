@@ -51,10 +51,19 @@ def get_user_settings(user_id: int):
 def is_admin(user_id: int) -> bool:
     return not ADMIN_IDS or user_id in ADMIN_IDS
 
-def get_progress_bar(percentage):
-    filled = int(percentage / 10)
-    bar = "██" * filled + "░░" * (10 - filled)
-    return f"{bar} {percentage}%"
+def format_duration(seconds):
+    if seconds <= 0:
+        return "0s"
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+def get_progress_bar(percentage, length=15):
+    filled_len = int(length * percentage / 100)
+    bar = "█" * filled_len + "░" * (length - filled_len)
+    return f"`{bar}` {percentage:.1f}%"
 
 async def worker():
     """Worker to process jobs from the queue."""
@@ -66,15 +75,27 @@ async def worker():
         input_data = job['data']
         options = job['options']
         job_id = str(uuid.uuid4())[:8]
+        job_start_time = datetime.now()
         
         # Initial status message
         status_msg = await bot.send_message(chat_id, f"📡 **Job `{job_id}`**: Menghubungkan ke server...")
 
         async def update_progress(percentage, stage_msg):
+            now = datetime.now()
+            elapsed = (now - job_start_time).total_seconds()
+            
+            eta_str = "Calculating..."
+            if percentage > 0.5: # Only show ETA after some progress
+                total_est = elapsed / (percentage / 100)
+                remaining = total_est - elapsed
+                eta_str = format_duration(remaining)
+            
             progress_text = (
                 f"🚀 **Processing Job**: `{job_id}`\n"
                 f"📊 Stage: `{stage_msg}`\n\n"
-                f"{get_progress_bar(percentage)}"
+                f"{get_progress_bar(percentage)}\n"
+                f"⏱ Elapsed: {format_duration(elapsed)}\n"
+                f"⏳ ETA: {eta_str}"
             )
             try:
                 # Update but not too fast to avoid 429
@@ -89,7 +110,7 @@ async def worker():
             # STAGE 1: Download (0-30%)
             await update_progress(5, "Downloading video...")
             if input_type == "url":
-                input_path = await engine.download_video(input_data, job_id)
+                input_path = await engine.download_video(input_data, job_id, progress_callback=update_progress)
             else:
                 input_path = input_data
             await update_progress(30, "Download complete.")

@@ -67,10 +67,24 @@ class VideoEngine:
         except Exception:
             return None
 
-    async def download_video(self, url: str, job_id: str) -> str:
+    async def download_video(self, url: str, job_id: str, progress_callback=None) -> str:
         """Downloads video with AI-powered self-healing and specific format fallback logic."""
         output_template = os.path.join(self.temp_dir, f"{job_id}_input.%(ext)s")
         
+        def yt_dlp_hook(d):
+            if d['status'] == 'downloading':
+                try:
+                    p_str = d.get('_percent_str', '0%').replace('%', '').strip()
+                    p_float = float(p_str)
+                    # Map 0-100% download to 5-30% job progress
+                    job_p = 5 + (p_float / 100 * 25)
+                    if progress_callback:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.run_coroutine_threadsafe(progress_callback(job_p, f"Downloading... ({p_float:.1f}%)"), loop)
+                except Exception:
+                    pass
+
         # Sequence of formats: User-suggested high-compatibility string is now primary
         format_fallbacks = [
             "(bv*+ba/b/bv+ba/best)",
@@ -87,6 +101,7 @@ class VideoEngine:
             'ignoreerrors': False,
             'noplaylist': True,
             'retries': 10,
+            'progress_hooks': [yt_dlp_hook],
             'headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -251,8 +266,10 @@ class VideoEngine:
         total_clips = len(clips_to_process)
         
         for i, (times, title) in enumerate(clips_to_process):
-            p = 65 + int((i / total_clips) * 30)
-            if progress_callback: await progress_callback(p, f"Rendering clip {i+1}/{total_clips}...")
+            # Detailed progress: 65% + (i * step)
+            step = 30 / total_clips
+            p = 65 + (i * step)
+            if progress_callback: await progress_callback(round(p, 1), f"Rendering clip {i+1}/{total_clips}...")
             
             start_t, end_t = times
             clip_name = f"clip_{i+1:02d}.mp4"
