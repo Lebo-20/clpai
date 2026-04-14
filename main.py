@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import uuid
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -44,7 +45,7 @@ def get_user_settings(user_id: int):
             "mode": "auto",
             "subtitles": False,
             "vertical": True,
-            "max_clips": 3
+            "max_clips": 5
         }
     return user_settings[user_id]
 
@@ -244,12 +245,14 @@ async def cmd_start(message: Message):
         f"• Mode: `{settings['mode']}`\n"
         f"• Durasi: `{settings['duration']}s`\n"
         f"• Subtitle: `{'On' if settings['subtitles'] else 'Off'}`\n"
-        f"• Vertical: `{'Yes' if settings['vertical'] else 'No'}`\n\n"
+        f"• Vertical: `{'Yes' if settings['vertical'] else 'No'}`\n"
+        f"• Max Clips: `{settings['max_clips']}`\n\n"
         "🎥 **Kirim Link atau File Video untuk mulai.**"
     )
     kb = [
         [KeyboardButton(text="⏱ Set Durasi"), KeyboardButton(text="📱 Toggle Vertical")],
-        [KeyboardButton(text="💬 Toggle Subtitle"), KeyboardButton(text="⚙️ Settings")]
+        [KeyboardButton(text="💬 Toggle Subtitle"), KeyboardButton(text="🎞 Jumlah Klip")],
+        [KeyboardButton(text="⚙️ Settings")]
     ]
     await clean_send(message, text, reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
@@ -327,6 +330,21 @@ async def cmd_settings(message: Message):
     status = "Smart AI" if settings['mode'] == "ai" else "Visual Auto"
     await clean_send(message, f"⚙️ **Pengaturan Mode Clipping**\n\nMode Saat Ini: `{status}`", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
+@dp.message(F.text == "🎞 Jumlah Klip")
+async def set_max_clips_menu(message: Message):
+    kb = [
+        [KeyboardButton(text="1 Klip"), KeyboardButton(text="3 Klip"), KeyboardButton(text="5 Klip")],
+        [KeyboardButton(text="10 Klip"), KeyboardButton(text="15 Klip"), KeyboardButton(text="Kembali")]
+    ]
+    await clean_send(message, "Pilih jumlah klip maksimal yang ingin dihasilkan:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+
+@dp.message(F.text.regexp(r'^(\d+) Klip$'))
+async def process_max_clips_set(message: Message):
+    num = int(re.search(r'\d+', message.text).group())
+    settings = get_user_settings(message.from_user.id)
+    settings['max_clips'] = num
+    await cmd_start(message)
+
 @dp.message(F.text == "🤖 Toggle Mode AI")
 async def toggle_ai_mode(message: Message):
     settings = get_user_settings(message.from_user.id)
@@ -384,8 +402,11 @@ async def handle_link(message: Message):
         'options': get_user_settings(message.from_user.id).copy()
     }
     
+    duration_str = format_duration(info.get('duration', 0))
     await wait_msg.edit_text(
-        f"🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas video:",
+        f"🎬 **{info['title'][:50]}...**\n"
+        f"⏱ Durasi Sumber: `{duration_str}`\n\n"
+        f"Silakan pilih kualitas video:",
         reply_markup=kb.as_markup(),
         parse_mode="Markdown"
     )

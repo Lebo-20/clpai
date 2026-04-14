@@ -144,7 +144,8 @@ class VideoEngine:
             return {
                 'title': info.get('title'),
                 'formats': formats[:6],
-                'subtitles': subtitles
+                'subtitles': subtitles,
+                'duration': info.get('duration')
             }
         except Exception as e:
             logger.error(f"Error fetching video info: {e}")
@@ -327,7 +328,7 @@ class VideoEngine:
                         error_msg += "Kemungkinan video diblokir, private, atau butuh cookies terbaru."
                     raise Exception(error_msg)
 
-    async def analyze_with_gemini(self, transcript_segments: list):
+    async def analyze_with_gemini(self, transcript_segments: list, options: dict):
         """Uses Gemini AI to find the most viral segments based on transcript with scoring."""
         if not self.api_key:
             return None
@@ -336,8 +337,12 @@ class VideoEngine:
         for seg in transcript_segments:
             text_content += f"[{seg['start']:.1f} - {seg['end']:.1f}] {seg['text']}\n"
 
+        max_clips = options.get("max_clips", 15)
+        target_duration = options.get("duration", 30)
+
         prompt = f"""
-        Pilih top 15 bagian paling menarik (skor 1-10).
+        Pilih top {max_clips} bagian paling menarik (skor 1-10).
+        Fokus pada bagian yang memiliki durasi sekitar {target_duration} detik.
         Skor tinggi (+3) untuk emosi kuat, (+2) kata kunci unik (anjir, ternyata, serem), (+2) plot twist.
         Format JSON list: [{{"title": "clickbait", "start": 0, "end": 0, "score": 10}}]
         Transkrip:
@@ -351,7 +356,8 @@ class VideoEngine:
             if json_match:
                 return sorted(json.loads(json_match.group()), key=lambda x: x.get('score', 0), reverse=True)
             return None
-        except Exception:
+        except Exception as e:
+            logger.error(f"Gemini analysis failed: {e}")
             return None
 
     def _get_smart_crop_params(self, video_path, target_ratio=9/16):
@@ -408,10 +414,16 @@ class VideoEngine:
         do_subtitles = options.get("subtitles", False)
         do_vertical = options.get("vertical", True)
         target_duration = options.get("duration", 60)
+        max_clips = options.get("max_clips", 15)
+        
+        # Adjust max_clips if duration is very long to avoid massive processing time
+        if target_duration >= 300: # 5 minutes or more
+            max_clips = min(max_clips, 5) # Cap at 5 clips for long duration
         
         # PRE-VALIDATION before heavy processing
         video_duration = await asyncio.to_thread(self.validate_video, input_path)
-        
+        logger.info(f"Processing video: {input_path}, Duration: {video_duration}s, Target: {target_duration}s, Max Clips: {max_clips}")
+
         clips_to_process = []
 
         # STAGE 2: Transcribe (30-50%)
@@ -419,8 +431,6 @@ class VideoEngine:
         
         result = None
         try:
-            # Whisper will crash if audio is empty or missing
-            # Disable fp16 on CPU to avoid warnings and potential issues
             device = os.getenv("WHISPER_DEVICE", "cpu")
             use_fp16 = (device == "cuda")
             result = await asyncio.to_thread(self.whisper_model.transcribe, input_path, fp16=use_fp16)
@@ -432,28 +442,31 @@ class VideoEngine:
         if progress_callback: await progress_callback(50, "Analyzing scenes & scoring...")
         
         if mode == "ai" and self.api_key:
-            ai_segments = await self.analyze_with_gemini(result["segments"])
+            ai_segments = await self.analyze_with_gemini(result["segments"], options)
             if ai_segments:
-                for seg in ai_segments[:15]:
-                    # Respect maximum duration from settings and video limit
+                for seg in ai_segments[:max_clips]:
                     start = min(seg['start'], video_duration)
-                    end = min(seg['end'], start + target_duration, video_duration)
+                    # Use target_duration if it's longer than AI's segment end
+                    end = min(start + target_duration, video_duration)
+                    # If AI's segment is longer than target_duration, respect AI's segment
+                    if seg['end'] > end:
+                         end = min(seg['end'], video_duration)
+                    
                     clips_to_process.append(((start, end), seg['title']))
 
         if not clips_to_process:
-            # If Auto, we either use scene detect or fixed segments
-            if mode == "auto":
+            if mode == "auto" or (mode == "ai" and not self.api_key):
                 # Distribute clips across the entire video duration
-                max_clips = 15
-                # Calculate interval to spread clips evenly
-                step = video_duration / max_clips
+                if max_clips > 1:
+                    step = (video_duration - target_duration) / (max_clips - 1) if video_duration > target_duration else 0
+                else:
+                    step = 0
                 
                 for i in range(max_clips):
                     start = i * step
-                    # Make sure the clip doesn't go over the total duration
                     end = min(start + target_duration, video_duration)
                     
-                    if end - start > 2: # Ignore clips too short
+                    if end - start > 1: # Minimum 1s
                         clips_to_process.append(((start, end), f"clip_{i+1}"))
                     
                     if end >= video_duration:
@@ -461,9 +474,10 @@ class VideoEngine:
             else:
                 # Scene detection fallback
                 scene_list = detect(input_path, AdaptiveDetector(adaptive_threshold=3.0, min_scene_len=30))
-                for i, scene in enumerate(scene_list[:15]):
+                for i, scene in enumerate(scene_list[:max_clips]):
                     start = min(scene[0].get_seconds(), video_duration)
-                    end = min(scene[1].get_seconds(), start + target_duration, video_duration)
+                    # Respect target_duration
+                    end = min(start + target_duration, video_duration)
                     clips_to_process.append(((start, end), f"clip_{i+1}"))
 
         # STAGE 4: Rendering (65-95%)
