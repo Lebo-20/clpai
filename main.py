@@ -618,6 +618,10 @@ async def cmd_update(message: Message):
         )
         await status.edit_text(update_log, parse_mode="Markdown")
         
+        # Jika menggunakan PM2, bot akan otomatis restart saat kita exit
+        await asyncio.sleep(3)
+        os._exit(0)
+        
     except Exception as e:
         await status.edit_text(f"❌ **Update Gagal:**\n`{str(e)}`", parse_mode="Markdown")
 
