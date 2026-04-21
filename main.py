@@ -5,6 +5,7 @@ import logging
 import uuid
 import re
 import psutil
+import html
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -68,7 +69,7 @@ def format_duration(seconds):
 def get_progress_bar(percentage, length=15):
     filled_len = int(length * percentage / 100)
     bar = "█" * filled_len + "░" * (length - filled_len)
-    return f"`{bar}` {percentage:.1f}%"
+    return f"<code>{bar}</code> {percentage:.1f}%"
 
 async def worker():
     """Worker to process jobs from the queue."""
@@ -87,7 +88,7 @@ async def worker():
         job_start_time = datetime.now()
         
         # Initial status message
-        status_msg = await bot.send_message(chat_id, f"📡 **Job `{job_id}`**: Menghubungkan ke server...")
+        status_msg = await bot.send_message(chat_id, f"📡 <b>Job <code>{job_id}</code></b>: Menghubungkan ke server...", parse_mode="HTML")
 
         current_progress = {"p": 5, "stage": "Menghubungkan..."}
         job_active = True
@@ -119,20 +120,20 @@ async def worker():
                 ram_usage = psutil.virtual_memory().percent
                 
                 progress_text = (
-                    f"⚙️ **Processing Job**: `{job_id}`\n"
+                    f"⚙️ <b>Processing Job</b>: <code>{job_id}</code>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📍 **Stage**: `{stage_msg}`\n"
-                    f"📊 **Progress**: {get_progress_bar(percentage)}\n\n"
-                    f"🖥 **System Load**:\n"
-                    f"├ CPU: `{cpu_usage}%` | RAM: `{ram_usage}%` \n"
-                    f"└ *Parallel Jobs*: `{queue.qsize() + MAX_PARALLEL_JOBS}`\n\n"
-                    f"⏱ **Elapsed**: `{format_duration(elapsed)}`\n"
-                    f"⏳ **Estimasi Sisa**: `{eta_str}`\n"
+                    f"📍 <b>Stage</b>: <code>{html.escape(stage_msg)}</code>\n"
+                    f"📊 <b>Progress</b>: {get_progress_bar(percentage)}\n\n"
+                    f"🖥 <b>System Load</b>:\n"
+                    f"├ CPU: <code>{cpu_usage}%</code> | RAM: <code>{ram_usage}%</code> \n"
+                    f"└ <i>Parallel Jobs</i>: <code>{queue.qsize() + MAX_PARALLEL_JOBS}</code>\n\n"
+                    f"⏱ <b>Elapsed</b>: <code>{format_duration(elapsed)}</code>\n"
+                    f"⏳ <b>Estimasi Sisa</b>: <code>{eta_str}</code>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
-                    f"ℹ️ *Bot sedang bekerja keras untuk video Anda. Mohon tunggu sebentar!*"
+                    f"<i>ℹ️ Bot sedang bekerja keras untuk video Anda. Mohon tunggu sebentar!</i>"
                 )
                 try:
-                    await bot.edit_message_text(text=progress_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
+                    await bot.edit_message_text(text=progress_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="HTML")
                 except Exception:
                     pass
 
@@ -165,7 +166,7 @@ async def worker():
                 
                 await update_progress(95, "Uploading full video...")
                 video = FSInputFile(input_path)
-                await bot.send_video(chat_id, video, caption=f"✅ **Download Selesai!**\n\nID: `{job_id}`", parse_mode="Markdown")
+                await bot.send_video(chat_id, video, caption=f"✅ <b>Download Selesai!</b>\n\nID: <code>{job_id}</code>", parse_mode="HTML")
                 await update_progress(100, "Done!")
             else:
                 # STAGE 1: Download (0-30%)
@@ -192,11 +193,11 @@ async def worker():
                     video = FSInputFile(clip_path)
                     
                     if is_merged:
-                        caption = f"🎬 **{title}**\n\nKompilasi momen terbaik pilihan AI."
+                        caption = f"🎬 <b>{html.escape(title)}</b>\n\nKompilasi momen terbaik pilihan AI."
                     else:
-                        caption = f"🎬 **{title}**\n\nClip {i+1} dari {len(clips)-1 if len(clips)>1 else 1}"
+                        caption = f"🎬 <b>{html.escape(title)}</b>\n\nClip {i+1} dari {len(clips)-1 if len(clips)>1 else 1}"
                     
-                    await bot.send_video(chat_id, video, caption=caption, parse_mode="Markdown")
+                    await bot.send_video(chat_id, video, caption=caption, parse_mode="HTML")
                     await asyncio.sleep(1)
                 
                 await update_progress(100, "Done! Semua klip telah dikirim.")
@@ -205,7 +206,7 @@ async def worker():
 
         except Exception as e:
             logger.error(f"Error in worker for job {job_id}: {e}")
-            await bot.edit_message_text(text=f"❌ Job `{job_id}` gagal: {str(e)[:100]}", chat_id=chat_id, message_id=status_msg.message_id)
+            await bot.edit_message_text(text=f"❌ Job <code>{job_id}</code> gagal: {html.escape(str(e)[:100])}", chat_id=chat_id, message_id=status_msg.message_id, parse_mode="HTML")
         finally:
             # Matikan ticker secara aman
             job_active = False
@@ -238,7 +239,7 @@ async def worker():
 # Store last menu message ID to clean up
 last_menu_msgs = {}
 
-async def show_ui(chat_id: int, user_id: int, text: str, reply_markup=None, parse_mode="Markdown"):
+async def show_ui(chat_id: int, user_id: int, text: str, reply_markup=None, parse_mode="HTML"):
     """Edits the existing bot message or sends a new one if it doesn't exist."""
     msg_id = last_menu_msgs.get(user_id)
     
@@ -296,17 +297,17 @@ async def cmd_start(message: Message, user_id: int = None):
     
     settings = get_user_settings(user_id)
     text = (
-        "🚀 **AI CONTENT CREATOR BOT PRO**\n\n"
-        "Ubah video apapun menjadi konten viral secara otomatis dengan Gemini 1.5 Pro Modality.\n\n"
-        "✨ **Status Fitur:**\n"
-        "• 🧠 **AI Smart Mode**: " + ("✅ Aktif" if settings['mode'] == "ai" else "❌ Non-aktif") + "\n"
-        "• 📱 **Auto Vertical**: " + ("✅ Aktif" if settings['vertical'] else "❌ Non-aktif") + "\n"
-        "• 💬 **TikTok Subtitles**: " + ("✅ Aktif" if settings['subtitles'] else "❌ Non-aktif") + "\n\n"
-        "⚙️ **Konfigurasi Saat Ini:**\n"
-        f"• Target Durasi: `[ {settings['duration']} detik ]` 🔒\n"
-        f"• Jumlah Klip: `[ {settings['max_clips']} klip ]` 🔒\n\n"
-        "💡 **Cara Pakai:** Kirim video atau link ke sini. "
-        "Kirim instruksi teks (misal: *'cari bagian lucu'*) sebelum mengirim video untuk panduan AI!"
+        "🚀 <b>AI CONTENT CREATOR BOT PRO</b>\n\n"
+        "Ubah video apapun menjadi konten viral secara otomatis dengan Gemini 1.5 Flash Modality.\n\n"
+        "✨ <b>Status Fitur:</b>\n"
+        "• 🧠 <b>AI Smart Mode</b>: " + ("✅ Aktif" if settings['mode'] == "ai" else "❌ Non-aktif") + "\n"
+        "• 📱 <b>Auto Vertical</b>: " + ("✅ Aktif" if settings['vertical'] else "❌ Non-aktif") + "\n"
+        "• 💬 <b>TikTok Subtitles</b>: " + ("✅ Aktif" if settings['subtitles'] else "❌ Non-aktif") + "\n\n"
+        "⚙️ <b>Konfigurasi Saat Ini:</b>\n"
+        f"• Target Durasi: <code>[ {settings['duration']} detik ]</code> 🔒\n"
+        f"• Jumlah Klip: <code>[ {settings['max_clips']} klip ]</code> 🔒\n\n"
+        "💡 <b>Cara Pakai:</b> Kirim video atau link ke sini. "
+        "Kirim instruksi teks (misal: <i>'cari bagian lucu'</i>) sebelum mengirim video untuk panduan AI!"
     )
     
     kb = InlineKeyboardBuilder()
@@ -333,7 +334,7 @@ async def callback_duration_menu(callback: CallbackQuery):
         kb.button(text=label, callback_data=f"set_dur_{d}")
     kb.button(text="⬅️ Kembali", callback_data="menu_main")
     kb.adjust(3)
-    await show_ui(callback.message.chat.id, callback.from_user.id, "⏱ **Pilih Target Durasi Klip:**", reply_markup=kb.as_markup())
+    await show_ui(callback.message.chat.id, callback.from_user.id, "⏱ <b>Pilih Target Durasi Klip:</b>", reply_markup=kb.as_markup())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("set_dur_"))
@@ -376,7 +377,7 @@ async def callback_clips_menu(callback: CallbackQuery):
         kb.button(text=f"{n} Klip", callback_data=f"set_n_{n}")
     kb.button(text="⬅️ Kembali", callback_data="menu_main")
     kb.adjust(3)
-    await show_ui(callback.message.chat.id, callback.from_user.id, "🎞 **Pilih Jumlah Klip Maksimal:**", reply_markup=kb.as_markup())
+    await show_ui(callback.message.chat.id, callback.from_user.id, "🎞 <b>Pilih Jumlah Klip Maksimal:</b>", reply_markup=kb.as_markup())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("set_n_"))
@@ -420,14 +421,14 @@ async def handle_video(message: Message):
     mode_text = "Smart AI" if settings['mode'] == "ai" else "Visual Auto"
     q_size = queue.qsize()
     await bot.edit_message_text(
-        text=f"✅ **Video Masuk Antrean!**\n\n"
-             f"🚦 **Slot Server**: `{active_jobs}/{MAX_PARALLEL_JOBS} Aktif`\n"
-             f"👥 **Antrean**: `+{q_size} Menunggu`\n\n"
-             f"Mode: `{mode_text}`\n"
+        text=f"✅ <b>Video Masuk Antrean!</b>\n\n"
+             f"🚦 <b>Slot Server</b>: <code>{active_jobs}/{MAX_PARALLEL_JOBS} Aktif</code>\n"
+             f"👥 <b>Antrean</b>: <code>+{q_size} Menunggu</code>\n\n"
+             f"Mode: <code>{mode_text}</code>\n"
              f"🔍 AI akan segera menganalisa video Anda.",
         chat_id=message.chat.id,
         message_id=wait_msg.message_id,
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     
     # Update last_menu_msgs to this status message so worker can delete it
@@ -445,13 +446,13 @@ async def handle_custom_prompt(message: Message):
     # Store message ID as well for deletion
     user_prompts[user_id] = {"text": message.text, "msg_id": message.message_id}
     
-    text = f"🧠 **AI Instruction saved:**\n`{message.text}`\n\nKirim video/link sekarang untuk menerapkan instruksi ini."
+    text = f"🧠 <b>AI Instruction saved:</b>\n<code>{html.escape(message.text)}</code>\n\nKirim video/link sekarang untuk menerapkan instruksi ini."
     await show_ui(message.chat.id, user_id, text)
 
 @dp.message(F.text.regexp(r'^https?://'))
 async def handle_link(message: Message):
     url = message.text.strip()
-    wait_msg = await message.answer("🔍 **Menganalisa video...** Mohon tunggu.", parse_mode="Markdown")
+    wait_msg = await message.answer("🔍 <b>Menganalisa video...</b> Mohon tunggu.", parse_mode="HTML")
     
     info = await engine.get_video_info(url)
     if not info:
@@ -477,11 +478,11 @@ async def handle_link(message: Message):
     
     duration_str = format_duration(info.get('duration', 0))
     await wait_msg.edit_text(
-        f"🎬 **{info['title'][:50]}...**\n"
-        f"⏱ Durasi Sumber: `{duration_str}`\n\n"
+        f"🎬 <b>{html.escape(info['title'][:50])}...</b>\n"
+        f"⏱ Durasi Sumber: <code>{duration_str}</code>\n\n"
         f"Silakan pilih kualitas video:",
         reply_markup=kb.as_markup(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 @dp.callback_query(lambda c: c.data.startswith("sel_q_"))
@@ -509,9 +510,9 @@ async def process_quality_selection(callback: CallbackQuery):
         kb.adjust(2)
         
         await callback.message.edit_text(
-            f"🌐 **Subtitles Terdeteksi!**\n\nPilih bahasa subtitle yang ingin digunakan (opsional):",
+            f"🌐 <b>Subtitles Terdeteksi!</b>\n\nPilih bahasa subtitle yang ingin digunakan (opsional):",
             reply_markup=kb.as_markup(),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
     else:
         # No subtitles, jump to queue
@@ -548,10 +549,10 @@ async def finalize_link_selection(callback: CallbackQuery, lang_code: str):
     # Success message (Editing the current selection message)
     q_size = queue.qsize()
     await callback.message.edit_text(
-        text=f"✅ **Link Masuk Antrean!**\n\n"
-             f"🚦 **Slot Server**: `{active_jobs}/{MAX_PARALLEL_JOBS} Aktif`\n"
-             f"👥 **Antrean**: `+{q_size} Menunggu`",
-        parse_mode="Markdown"
+        text=f"✅ <b>Link Masuk Antrean!</b>\n\n"
+             f"🚦 <b>Slot Server</b>: <code>{active_jobs}/{MAX_PARALLEL_JOBS} Aktif</code>\n"
+             f"👥 <b>Antrean</b>: <code>+{q_size} Menunggu</code>",
+        parse_mode="HTML"
     )
     last_menu_msgs[user_id] = callback.message.message_id
 
@@ -585,14 +586,14 @@ async def handle_document(message: Message):
         new_size = os.path.getsize(target_name) / 1024
         
         msg = (
-            f"🔄 **Update Cookies Berhasil!**\n\n"
-            f"📁 File: `{target_name}`\n"
+            f"🔄 <b>Update Cookies Berhasil!</b>\n\n"
+            f"📁 File: <code>{target_name}</code>\n"
             f"🗑️ Status: Cookie lama ({old_size:.1f} KB) telah dihapus.\n"
             f"✅ Status: Cookie baru ({new_size:.1f} KB) telah diterima dan diaktifkan."
         )
-        await message.answer(msg, parse_mode="Markdown")
+        await message.answer(msg, parse_mode="HTML")
     else:
-        await message.answer(f"📦 File `{doc.file_name}` diterima, tapi sistem hanya memproses file cookies: `cookies.txt`, `cookies_tiktok.txt`, or `cookies_youtube.txt`.", parse_mode="Markdown")
+        await message.answer(f"📦 File <code>{html.escape(doc.file_name)}</code> diterima, tapi sistem hanya memproses file cookies: <code>cookies.txt</code>, <code>cookies_tiktok.txt</code>, or <code>cookies_youtube.txt</code>.", parse_mode="HTML")
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
@@ -613,20 +614,20 @@ async def cmd_admin(message: Message):
             cookie_status.append(f"❌ `{cf}` (Missing)")
 
     stats = (
-        "📊 **Admin Statistics**\n\n"
-        f"🔹 Antrean Aktif: `{queue.qsize()}`\n"
-        f"🔹 Temp Folder: `{TEMP_DIR}`\n"
-        f"🔹 Registered Admins: `{len(ADMIN_IDS)}`\n\n"
-        "🍪 **Cookie Files Status:**\n" + "\n".join(cookie_status)
+        "📊 <b>Admin Statistics</b>\n\n"
+        f"🔹 Antrean Aktif: <code>{queue.qsize()}</code>\n"
+        f"🔹 Temp Folder: <code>{TEMP_DIR}</code>\n"
+        f"🔹 Registered Admins: <code>{len(ADMIN_IDS)}</code>\n\n"
+        "🍪 <b>Cookie Files Status:</b>\n" + "\n".join(cookie_status)
     )
-    await message.answer(stats)
+    await message.answer(stats, parse_mode="HTML")
 
 @dp.message(Command("update"))
 async def cmd_update(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("🚫 Akses ditolak.")
         
-    status = await message.answer("🔄 **Mengecek pembaruan dari GitHub...**", parse_mode="Markdown")
+    status = await message.answer("🔄 <b>Mengecek pembaruan dari GitHub...</b>", parse_mode="HTML")
     
     try:
         # Menjalankan git pull
@@ -640,27 +641,27 @@ async def cmd_update(message: Message):
         output = stdout.decode().strip() or stderr.decode().strip()
         
         update_log = (
-            "✅ **Update Selesai!**\n\n"
-            f"📝 **Log Output:**\n"
-            f"```\n{output}\n```\n"
-            "💡 *Catatan: Restart bot secara manual atau via PM2 jika ada perubahan pada library.*"
+            "✅ <b>Update Selesai!</b>\n\n"
+            f"📝 <b>Log Output:</b>\n"
+            f"<pre>{html.escape(output)}</pre>\n"
+            "💡 <i>Catatan: Restart bot secara manual atau via PM2 jika ada perubahan pada library.</i>"
         )
-        await status.edit_text(update_log, parse_mode="Markdown")
+        await status.edit_text(update_log, parse_mode="HTML")
         
         # Jika menggunakan PM2, bot akan otomatis restart saat kita exit
         await asyncio.sleep(3)
         os._exit(0)
         
     except Exception as e:
-        await status.edit_text(f"❌ **Update Gagal:**\n`{str(e)}`", parse_mode="Markdown")
+        await status.edit_text(f"❌ <b>Update Gagal:</b>\n<code>{html.escape(str(e))}</code>", parse_mode="HTML")
 
 @dp.message(Command("l"))
 async def cmd_download_full(message: Message, command: CommandObject):
     if not command.args:
-        return await message.answer("💡 **Cara penggunaan:** `/l [link]`\nContoh: `/l https://youtube.com/watch?v=...`", parse_mode="Markdown")
+        return await message.answer("💡 <b>Cara penggunaan:</b> <code>/l [link]</code>\nContoh: <code>/l https://youtube.com/watch?v=...</code>", parse_mode="HTML")
         
     url = command.args.strip()
-    wait_msg = await message.answer("📥 **Mempersiapkan download video penuh...**", parse_mode="Markdown")
+    wait_msg = await message.answer("📥 <b>Mempersiapkan download video penuh...</b>", parse_mode="HTML")
     
     info = await engine.get_video_info(url)
     if not info:
@@ -680,9 +681,9 @@ async def cmd_download_full(message: Message, command: CommandObject):
     }
     
     await wait_msg.edit_text(
-        f"📥 **Link Full Download Terdeteksi!**\n🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas:",
+        f"📥 <b>Link Full Download Terdeteksi!</b>\n🎬 <b>{html.escape(info['title'][:50])}...</b>\n\nSilakan pilih kualitas:",
         reply_markup=kb.as_markup(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 async def main():

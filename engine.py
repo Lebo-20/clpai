@@ -61,7 +61,7 @@ class VideoEngine:
         {error_log}
         """
         try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = await asyncio.to_thread(model.generate_content, prompt)
             json_match = re.search(r'{{.*}}', response.text, re.DOTALL)
             if json_match:
@@ -380,7 +380,7 @@ class VideoEngine:
                 """
             ]
 
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = await asyncio.to_thread(model.generate_content, prompt)
             
             try: await asyncio.to_thread(genai.delete_file, video_file.name)
@@ -417,7 +417,7 @@ class VideoEngine:
         {text_content}
         """
         try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = await asyncio.to_thread(model.generate_content, prompt)
             json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
             if json_match:
