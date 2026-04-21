@@ -39,6 +39,8 @@ queue = asyncio.Queue()
 
 # User Settings Store (In-memory for now, could be DB)
 user_settings = {}
+active_jobs = 0
+active_jobs_lock = asyncio.Lock()
 
 def get_user_settings(user_id: int):
     if user_id not in user_settings:
@@ -72,6 +74,10 @@ async def worker():
     """Worker to process jobs from the queue."""
     while True:
         job = await queue.get()
+        async with active_jobs_lock:
+            global active_jobs
+            active_jobs += 1
+            
         user_id = job['user_id']
         chat_id = job['chat_id']
         input_type = job['type']
@@ -225,6 +231,8 @@ async def worker():
             await delete_user_messages(chat_id, trigger_ids)
             
             queue.task_done()
+            async with active_jobs_lock:
+                active_jobs -= 1
             logger.info(f"Finished job {job_id}")
 
 # Store last menu message ID to clean up
@@ -410,10 +418,13 @@ async def handle_video(message: Message):
     })
     
     mode_text = "Smart AI" if settings['mode'] == "ai" else "Visual Auto"
+    q_size = queue.qsize()
     await bot.edit_message_text(
-        text=f"✅ Video masuk antrean! (Mode: `{mode_text}`)\n"
-             f"Posisi: {queue.qsize()}\n\n"
-             f"AI akan menganalisa visual & audio video Anda agar clipping lebih akurat. 🔍",
+        text=f"✅ **Video Masuk Antrean!**\n\n"
+             f"🚦 **Slot Server**: `{active_jobs}/{MAX_PARALLEL_JOBS} Aktif`\n"
+             f"👥 **Antrean**: `+{q_size} Menunggu`\n\n"
+             f"Mode: `{mode_text}`\n"
+             f"🔍 AI akan segera menganalisa video Anda.",
         chat_id=message.chat.id,
         message_id=wait_msg.message_id,
         parse_mode="Markdown"
@@ -535,7 +546,13 @@ async def finalize_link_selection(callback: CallbackQuery, lang_code: str):
     })
     
     # Success message (Editing the current selection message)
-    await callback.message.edit_text(f"✅ Link masuk antrean! Posisi: {queue.qsize()}")
+    q_size = queue.qsize()
+    await callback.message.edit_text(
+        text=f"✅ **Link Masuk Antrean!**\n\n"
+             f"🚦 **Slot Server**: `{active_jobs}/{MAX_PARALLEL_JOBS} Aktif`\n"
+             f"👥 **Antrean**: `+{q_size} Menunggu`",
+        parse_mode="Markdown"
+    )
     last_menu_msgs[user_id] = callback.message.message_id
 
 @dp.message(F.document)
