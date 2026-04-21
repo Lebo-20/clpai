@@ -61,7 +61,7 @@ class VideoEngine:
         {error_log}
         """
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-pro')
             response = await asyncio.to_thread(model.generate_content, prompt)
             json_match = re.search(r'{{.*}}', response.text, re.DOTALL)
             if json_match:
@@ -328,11 +328,80 @@ class VideoEngine:
                         error_msg += "Kemungkinan video diblokir, private, atau butuh cookies terbaru."
                     raise Exception(error_msg)
 
-    async def analyze_with_gemini(self, transcript_segments: list, options: dict):
-        """Uses Gemini AI to find the most viral segments based on transcript with scoring."""
+    async def analyze_with_gemini(self, video_path: str, transcript_segments: list, options: dict, progress_callback=None):
+        """Uses Gemini AI to find the most viral segments based on BOTH video content and transcript."""
         if not self.api_key:
             return None
 
+        # Prepare transcript text
+        text_content = ""
+        for seg in transcript_segments:
+            text_content += f"[{seg['start']:.1f} - {seg['end']:.1f}] {seg['text']}\n"
+
+        max_clips = options.get("max_clips", 15)
+        target_duration = options.get("duration", 30)
+        custom_instructions = options.get("custom_instructions", "")
+
+        try:
+            if progress_callback: await progress_callback(52, "Gemini is analyzing video context...")
+            
+            # Upload to Gemini File API
+            video_file = await asyncio.to_thread(genai.upload_file, path=video_path, display_name=f"job_{os.path.basename(video_path)}")
+            
+            if progress_callback: await progress_callback(55, "Generating viral clips & headlines...")
+            
+            # Wait for processing
+            while True:
+                file_status = await asyncio.to_thread(genai.get_file, video_file.name)
+                if file_status.state.name == "ACTIVE":
+                    break
+                elif file_status.state.name == "FAILED":
+                    raise Exception("Gemini analysis failed during processing.")
+                await asyncio.sleep(2)
+
+            instruction_text = f"Spesifik permintaan user: {custom_instructions}" if custom_instructions else "Cari momen paling viral dan menarik."
+
+            prompt = [
+                video_file,
+                f"""
+                Analisa video ini dan transkripnya. {instruction_text}
+                Berikan {max_clips} momen terbaik dengan durasi rata-rata {target_duration} detik.
+                
+                Kriteria Premium:
+                1. Skor tinggi untuk emosi, visual unik, dan hook yang kuat.
+                2. BUAT HEADLINE CLICKBAIT (BAHASA INDONESIA) UNTUK SETIAP KLIP. 
+                   Contoh: "REAKSI SAAT TAHU... 😱", "PLOT TWIST PALING GILA! 🔥"
+                
+                Output WAJIB JSON list format: 
+                [{{"title": "JUDUL CLICKBAIT KEREN", "start": 0.0, "end": 30.0, "score": 10}}]
+                
+                Transkrip:
+                {text_content}
+                """
+            ]
+
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            
+            try: await asyncio.to_thread(genai.delete_file, video_file.name)
+            except: pass
+
+            json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                for item in data:
+                    item['start'] = float(item.get('start', 0))
+                    item['end'] = float(item.get('end', 0))
+                return sorted(data, key=lambda x: x.get('score', 0), reverse=True)
+            
+            return None
+        except Exception as e:
+            logger.error(f"Gemini deep analysis failed: {e}")
+            # Fallback to transcript-only analysis if video upload fails
+            return await self._analyze_transcript_only(transcript_segments, options)
+
+    async def _analyze_transcript_only(self, transcript_segments: list, options: dict):
+        """Fallback method for transcript-only analysis."""
         text_content = ""
         for seg in transcript_segments:
             text_content += f"[{seg['start']:.1f} - {seg['end']:.1f}] {seg['text']}\n"
@@ -341,23 +410,20 @@ class VideoEngine:
         target_duration = options.get("duration", 30)
 
         prompt = f"""
-        Pilih top {max_clips} bagian paling menarik (skor 1-10).
+        Pilih top {max_clips} bagian paling menarik dari transkrip (skor 1-10).
         Fokus pada bagian yang memiliki durasi sekitar {target_duration} detik.
-        Skor tinggi (+3) untuk emosi kuat, (+2) kata kunci unik (anjir, ternyata, serem), (+2) plot twist.
         Format JSON list: [{{"title": "clickbait", "start": 0, "end": 0, "score": 10}}]
         Transkrip:
         {text_content}
         """
-
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-pro')
             response = await asyncio.to_thread(model.generate_content, prompt)
             json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
             if json_match:
                 return sorted(json.loads(json_match.group()), key=lambda x: x.get('score', 0), reverse=True)
             return None
-        except Exception as e:
-            logger.error(f"Gemini analysis failed: {e}")
+        except Exception:
             return None
 
     def _get_smart_crop_params(self, video_path, target_ratio=9/16):
@@ -442,7 +508,7 @@ class VideoEngine:
         if progress_callback: await progress_callback(50, "Analyzing scenes & scoring...")
         
         if mode == "ai" and self.api_key:
-            ai_segments = await self.analyze_with_gemini(result["segments"], options)
+            ai_segments = await self.analyze_with_gemini(input_path, result["segments"], options, progress_callback)
             if ai_segments:
                 for seg in ai_segments[:max_clips]:
                     start = min(seg['start'], video_duration)
@@ -506,15 +572,14 @@ class VideoEngine:
                 subprocess.run(['ffmpeg', '-y', '-i', curr, '-vf', f"crop={crop_params}", '-c:a', 'copy', v_path], check=True, capture_output=True)
                 curr = v_path
 
+            # STAGE 4.2: Add Subtitles & Headline Overlay
             if do_subtitles:
                 s_path = os.path.join(output_folder, f"sub_{clip_name}")
                 srt_path = os.path.join(output_folder, f"sub_{i}.srt")
                 
-                # REUSE global transcribe result (much faster!)
                 clip_segments = []
                 for seg in result["segments"]:
                     if seg['start'] >= start_t and seg['end'] <= end_t:
-                        # Normalize timestamps relative to clip start
                         new_seg = seg.copy()
                         new_seg['start'] -= start_t
                         new_seg['end'] -= start_t
@@ -522,24 +587,30 @@ class VideoEngine:
                 
                 if clip_segments:
                     self._write_srt(clip_segments, srt_path)
-                    escaped = srt_path.replace("\\", "/").replace(":", "\\:")
+                    escaped_srt = srt_path.replace("\\", "/").replace(":", "\\:")
+                    # TikTok Style Subtitles: Bold, Yellow outline, White text
+                    sub_style = "Fontname=Arial,PrimaryColour=&HFFFFFF,SecondaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,FontSize=12,Bold=1,MarginV=60"
                     
-                    # Custom styling based on orientation (Vertical vs Horizontal)
-                    if do_vertical:
-                        # Style for Vertical: Standard Symbols PS, Size 10, Bold, Outline 1, MarginV 90
-                        style = "Fontname=Standard Symbols PS,PrimaryColour=&HFFFFFF,SecondaryColour=&H000000,OutlineColour=&H000000,BorderStyle=1,Outline=1,Shadow=0,Alignment=2,FontSize=10,Bold=1,MarginV=90"
-                    else:
-                        # Style for Horizontal: Nimbus Sans Narrow, Size 24, MarginV 8
-                        style = "Fontname=Nimbus Sans Narrow,PrimaryColour=&HFFFFFF,SecondaryColour=&H000000,OutlineColour=&H000000,BorderStyle=1,Outline=1,Shadow=0,Alignment=2,FontSize=24,Bold=0,MarginV=8"
+                    # Headline Overlay: Top center black background
+                    title_upper = title.upper()
+                    headline_filter = f"drawtext=text='{title_upper}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=60"
                     
-                    cmd = ['ffmpeg', '-y', '-i', curr, '-vf', f"subtitles='{escaped}':force_style='{style}'", '-c:a', 'copy', s_path]
+                    # Combined filters
+                    vf = f"subtitles='{escaped_srt}':force_style='{sub_style}',{headline_filter}"
+                    
+                    cmd = ['ffmpeg', '-y', '-i', curr, '-vf', vf, '-c:a', 'copy', s_path]
                     subprocess.run(cmd, check=True, capture_output=True)
                     curr = s_path
                 else:
-                    logger.info(f"No speech detected for clip {i+1}, skipping subtitles.")
+                    # Just Headlines if no speech
+                    h_path = os.path.join(output_folder, f"head_{clip_name}")
+                    title_upper = title.upper()
+                    vf = f"drawtext=text='{title_upper}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=60"
+                    subprocess.run(['ffmpeg', '-y', '-i', curr, '-vf', vf, '-c:a', 'copy', h_path], check=True, capture_output=True)
+                    curr = h_path
 
             shutil.move(curr, final_path)
-            final_files.append(final_path)
+            final_files.append((final_path, title)) # Return path AND title
 
         # STAGE 5: Merging (95-100%)
         if progress_callback: await progress_callback(95, "Finalizing highlight video...")
@@ -547,9 +618,9 @@ class VideoEngine:
             m_path = os.path.join(output_folder, "final_highlight.mp4")
             l_path = os.path.join(output_folder, "list.txt")
             with open(l_path, "w") as f:
-                for fp in final_files: f.write(f"file '{os.path.basename(fp)}'\n")
+                for fp, _ in final_files: f.write(f"file '{os.path.basename(fp)}'\n")
             subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', l_path, '-c', 'copy', m_path], check=True, capture_output=True)
-            final_files.append(m_path)
+            final_files.append((m_path, "FINAL HIGHLIGHT REEL"))
 
         return final_files
 

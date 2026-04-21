@@ -42,7 +42,7 @@ def get_user_settings(user_id: int):
     if user_id not in user_settings:
         user_settings[user_id] = {
             "duration": 30,
-            "mode": "auto",
+            "mode": "ai", # Default to AI for best accuracy as requested
             "subtitles": False,
             "vertical": True,
             "max_clips": 5
@@ -168,15 +168,15 @@ async def worker():
             # STAGE 6: Upload (95-100%)
             if clips:
                 await update_progress(96, "Uploading results...")
-                # Filename final_highlight.mp4 is always at the end
-                for i, clip_path in enumerate(clips):
+                # clips is now List[Tuple[path, title]]
+                for i, (clip_path, title) in enumerate(clips):
                     is_merged = os.path.basename(clip_path) == "final_highlight.mp4"
                     video = FSInputFile(clip_path)
                     
                     if is_merged:
-                        caption = f"🎬 **FINAL HIGHLIGHT** (ID `{job_id}`)\n\nTop 15 scene terbaik pilihan AI."
+                        caption = f"🎬 **{title}**\n\nKompilasi momen terbaik pilihan AI."
                     else:
-                        caption = f"🎬 **Clip {i+1}** (ID `{job_id}`)"
+                        caption = f"🎬 **{title}**\n\nClip {i+1} dari {len(clips)-1 if len(clips)>1 else 1}"
                     
                     await bot.send_video(chat_id, video, caption=caption, parse_mode="Markdown")
                     await asyncio.sleep(1)
@@ -201,159 +201,172 @@ async def worker():
             if input_path:
                 await engine.cleanup(input_path)
             if 'clips' in locals() and clips:
-                await engine.cleanup(os.path.dirname(clips[0]))
+                await engine.cleanup(os.path.dirname(clips[0][0]))
+                
+            # FINAL CLEANUP: Delete status message and user trigger messages
+            try:
+                await bot.delete_message(chat_id, status_msg.message_id)
+                last_menu_msgs.pop(user_id, None)
+            except: pass
+            
+            trigger_ids = job.get('trigger_msg_ids', [])
+            await delete_user_messages(chat_id, trigger_ids)
+            
             queue.task_done()
             logger.info(f"Finished job {job_id}")
 
 # Store last menu message ID to clean up
 last_menu_msgs = {}
 
-async def clean_send(message: Message, text: str, reply_markup=None, parse_mode="Markdown"):
-    """Deletes previous menu and user trigger to keep chat clean."""
-    user_id = message.from_user.id
+async def show_ui(chat_id: int, user_id: int, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Edits the existing bot message or sends a new one if it doesn't exist."""
+    msg_id = last_menu_msgs.get(user_id)
     
-    # 1. Delete user's command
-    try:
-        await message.delete()
-    except Exception:
-        pass
-        
-    # 2. Delete last bot menu if exists
-    if user_id in last_menu_msgs:
+    if msg_id:
         try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=last_menu_msgs[user_id])
+            new_msg = await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+            return new_msg
+        except Exception as e:
+            # If edit fails (e.g. content same, or too old), we try to send a new one
+            # and delete the old one to avoid stacking
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except: pass
+            
+    try:
+        new_msg = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+        last_menu_msgs[user_id] = new_msg.message_id
+        return new_msg
+    except Exception as e:
+        logger.error(f"UI Error: {e}")
+        # Fallback to simple send if Markdown fails
+        if parse_mode:
+            new_msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=None)
+            last_menu_msgs[user_id] = new_msg.message_id
+            return new_msg
+        return None
+
+async def delete_user_messages(chat_id: int, message_ids: list):
+    """Safely deletes user messages."""
+    for mid in message_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
         except Exception:
             pass
-            
-    # 3. Send new message and store ID
-    new_msg = await bot.send_message(
-        chat_id=message.chat.id, 
-        text=text, 
-        reply_markup=reply_markup, 
-        parse_mode=parse_mode
-    )
-    last_menu_msgs[user_id] = new_msg.message_id
-    return new_msg
 
 @dp.message(Command("start"))
-async def cmd_start(message: Message):
-    settings = get_user_settings(message.from_user.id)
-    text = (
-        "👋 **Selamat datang di AI Video Clipper Pro!**\n\n"
-        "Ubah video panjang menjadi konten pendek viral secara otomatis.\n\n"
-        "⚙️ **Konfigurasi Aktif:**\n"
-        f"• Mode: `{settings['mode']}`\n"
-        f"• Durasi: `{settings['duration']}s`\n"
-        f"• Subtitle: `{'On' if settings['subtitles'] else 'Off'}`\n"
-        f"• Vertical: `{'Yes' if settings['vertical'] else 'No'}`\n"
-        f"• Max Clips: `{settings['max_clips']}`\n\n"
-        "🎥 **Kirim Link atau File Video untuk mulai.**"
-    )
-    kb = [
-        [KeyboardButton(text="⏱ Set Durasi"), KeyboardButton(text="📱 Toggle Vertical")],
-        [KeyboardButton(text="💬 Toggle Subtitle"), KeyboardButton(text="🎞 Jumlah Klip")],
-        [KeyboardButton(text="⚙️ Settings")]
-    ]
-    await clean_send(message, text, reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-@dp.message(F.text == "⏱ Set Durasi")
-async def set_duration_menu(message: Message):
-    kb = [
-        [KeyboardButton(text="15s"), KeyboardButton(text="30s"), KeyboardButton(text="60s"), KeyboardButton(text="90s")],
-        [KeyboardButton(text="2m"), KeyboardButton(text="3m"), KeyboardButton(text="5m")],
-        [KeyboardButton(text="10m"), KeyboardButton(text="Kembali")]
-    ]
-    await clean_send(message, "Pilih durasi klip target (s=detik, m=menit):", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-@dp.message(F.text.regexp(r'^(\d+)(s|m)$'))
-async def process_duration_set(message: Message):
-    text = message.text
-    dur = int(text.replace("s", "")) if text.endswith("s") else int(text.replace("m", "")) * 60
-    settings = get_user_settings(message.from_user.id)
-    settings['duration'] = dur
-    # Return to start menu after setting
-    await cmd_start(message)
-
-@dp.message(F.text == "📱 Toggle Vertical")
-async def toggle_vertical(message: Message):
-    settings = get_user_settings(message.from_user.id)
-    settings['vertical'] = not settings['vertical']
-    await cmd_start(message)
-
-@dp.message(Command("l"))
-async def cmd_download_full(message: Message, command: CommandObject):
-    if not command.args:
-        return await message.answer("💡 **Cara penggunaan:** `/l [link]`\nContoh: `/l https://youtube.com/watch?v=...`", parse_mode="Markdown")
-        
-    url = command.args.strip()
-    wait_msg = await message.answer("📥 **Mempersiapkan download video penuh...**", parse_mode="Markdown")
+@dp.message(F.text == "Kembali")
+async def cmd_start(message: Message, user_id: int = None):
+    if user_id is None:
+        user_id = message.from_user.id
+        # Hanya hapus pesan jika ini adalah command asli dari user (bukan callback)
+        if message.text and message.text != "Kembali":
+            await delete_user_messages(message.chat.id, [message.message_id])
     
-    # We still use interactive selection for quality for full downloads
-    info = await engine.get_video_info(url)
-    if not info:
-        return await wait_msg.edit_text("❌ Gagal mengambil info video. Pastikan link benar.")
-        
-    # Build Quality Keyboard (same as clipping)
+    settings = get_user_settings(user_id)
+    text = (
+        "🚀 **AI CONTENT CREATOR BOT PRO**\n\n"
+        "Ubah video apapun menjadi konten viral secara otomatis dengan Gemini 1.5 Pro Modality.\n\n"
+        "✨ **Status Fitur:**\n"
+        "• 🧠 **AI Smart Mode**: " + ("✅ Aktif" if settings['mode'] == "ai" else "❌ Non-aktif") + "\n"
+        "• 📱 **Auto Vertical**: " + ("✅ Aktif" if settings['vertical'] else "❌ Non-aktif") + "\n"
+        "• 💬 **TikTok Subtitles**: " + ("✅ Aktif" if settings['subtitles'] else "❌ Non-aktif") + "\n\n"
+        "⚙️ **Konfigurasi Saat Ini:**\n"
+        f"• Target Durasi: `[ {settings['duration']} detik ]` 🔒\n"
+        f"• Jumlah Klip: `[ {settings['max_clips']} klip ]` 🔒\n\n"
+        "💡 **Cara Pakai:** Kirim video atau link ke sini. "
+        "Kirim instruksi teks (misal: *'cari bagian lucu'*) sebelum mengirim video untuk panduan AI!"
+    )
+    
     kb = InlineKeyboardBuilder()
-    for f in info['formats']:
-        kb.button(text=f"{f['height']}p ({f['ext']})", callback_data=f"sel_q_{f['id']}")
-    kb.button(text="Auto (Best)", callback_data="sel_q_best")
+    kb.button(text="⏱ Durasi", callback_data="menu_dur")
+    kb.button(text="📱 Vertical", callback_data="toggle_v")
+    kb.button(text="💬 Subtitle", callback_data="toggle_s")
+    kb.button(text="🎞 Jumlah", callback_data="menu_clips")
+    kb.button(text="🤖 Mode AI", callback_data="toggle_ai")
+    kb.button(text="🔄 Refresh", callback_data="menu_main")
     kb.adjust(2)
     
-    # Store session but with type='full_download'
-    pending_sessions[message.from_user.id] = {
-        'url': url,
-        'info': info,
-        'msg_ids': [wait_msg.message_id, message.message_id],
-        'options': {'type': 'full_download', 'vertical': False, 'subtitles': False} # Defaults for full download
-    }
-    
-    await wait_msg.edit_text(
-        f"📥 **Link Full Download Terdeteksi!**\n🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas:",
-        reply_markup=kb.as_markup(),
-        parse_mode="Markdown"
-    )
+    await show_ui(message.chat.id, user_id, text, reply_markup=kb.as_markup())
 
-@dp.message(F.text == "💬 Toggle Subtitle")
-async def toggle_subs(message: Message):
-    settings = get_user_settings(message.from_user.id)
+@dp.callback_query(F.data == "menu_main")
+async def callback_back(callback: CallbackQuery):
+    await cmd_start(callback.message, user_id=callback.from_user.id)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_dur")
+async def callback_duration_menu(callback: CallbackQuery):
+    kb = InlineKeyboardBuilder()
+    for d in [15, 30, 60, 120, 180, 300, 600]:
+        label = f"{d}s" if d < 60 else f"{d//60}m"
+        kb.button(text=label, callback_data=f"set_dur_{d}")
+    kb.button(text="⬅️ Kembali", callback_data="menu_main")
+    kb.adjust(3)
+    await show_ui(callback.message.chat.id, callback.from_user.id, "⏱ **Pilih Target Durasi Klip:**", reply_markup=kb.as_markup())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_dur_"))
+async def callback_set_duration(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    dur = int(callback.data.split("_")[-1])
+    settings = get_user_settings(user_id)
+    settings['duration'] = dur
+    await callback.answer(f"✅ Durasi diatur ke {dur}s (Saved)")
+    await cmd_start(callback.message, user_id=user_id)
+
+@dp.callback_query(F.data == "toggle_v")
+async def callback_toggle_v(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    settings = get_user_settings(user_id)
+    settings['vertical'] = not settings['vertical']
+    await callback.answer(f"📱 Vertical: {'ON' if settings['vertical'] else 'OFF'}")
+    await cmd_start(callback.message, user_id=user_id)
+
+@dp.callback_query(F.data == "toggle_s")
+async def callback_toggle_s(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    settings = get_user_settings(user_id)
     settings['subtitles'] = not settings['subtitles']
-    await cmd_start(message)
+    await callback.answer(f"💬 Subtitle: {'ON' if settings['subtitles'] else 'OFF'}")
+    await cmd_start(callback.message, user_id=user_id)
 
-@dp.message(F.text == "⚙️ Settings")
-async def cmd_settings(message: Message):
-    settings = get_user_settings(message.from_user.id)
-    kb = [
-        [KeyboardButton(text="🤖 Toggle Mode AI")],
-        [KeyboardButton(text="Kembali")]
-    ]
-    status = "Smart AI" if settings['mode'] == "ai" else "Visual Auto"
-    await clean_send(message, f"⚙️ **Pengaturan Mode Clipping**\n\nMode Saat Ini: `{status}`", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-@dp.message(F.text == "🎞 Jumlah Klip")
-async def set_max_clips_menu(message: Message):
-    kb = [
-        [KeyboardButton(text="1 Klip"), KeyboardButton(text="3 Klip"), KeyboardButton(text="5 Klip")],
-        [KeyboardButton(text="10 Klip"), KeyboardButton(text="15 Klip"), KeyboardButton(text="Kembali")]
-    ]
-    await clean_send(message, "Pilih jumlah klip maksimal yang ingin dihasilkan:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-@dp.message(F.text.regexp(r'^(\d+) Klip$'))
-async def process_max_clips_set(message: Message):
-    num = int(re.search(r'\d+', message.text).group())
-    settings = get_user_settings(message.from_user.id)
-    settings['max_clips'] = num
-    await cmd_start(message)
-
-@dp.message(F.text == "🤖 Toggle Mode AI")
-async def toggle_ai_mode(message: Message):
-    settings = get_user_settings(message.from_user.id)
+@dp.callback_query(F.data == "toggle_ai")
+async def callback_toggle_ai(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    settings = get_user_settings(user_id)
     settings['mode'] = "ai" if settings['mode'] != "ai" else "auto"
-    await cmd_start(message)
+    await callback.answer(f"🤖 Mode: {settings['mode'].upper()}")
+    await cmd_start(callback.message, user_id=user_id)
 
-@dp.message(F.text == "Kembali")
-async def cmd_back(message: Message):
-    await cmd_start(message)
+@dp.callback_query(F.data == "menu_clips")
+async def callback_clips_menu(callback: CallbackQuery):
+    kb = InlineKeyboardBuilder()
+    for n in [1, 3, 5, 10, 15]:
+        kb.button(text=f"{n} Klip", callback_data=f"set_n_{n}")
+    kb.button(text="⬅️ Kembali", callback_data="menu_main")
+    kb.adjust(3)
+    await show_ui(callback.message.chat.id, callback.from_user.id, "🎞 **Pilih Jumlah Klip Maksimal:**", reply_markup=kb.as_markup())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_n_"))
+async def callback_set_clips(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    n = int(callback.data.split("_")[-1])
+    settings = get_user_settings(user_id)
+    settings['max_clips'] = n
+    await callback.answer(f"✅ Jumlah klip diatur ke {n} (Saved)")
+    await cmd_start(callback.message, user_id=user_id)
 
 @dp.message(F.video)
 async def handle_video(message: Message):
@@ -366,18 +379,51 @@ async def handle_video(message: Message):
     await bot.download_file(video_file.file_path, file_path)
     
     settings = get_user_settings(message.from_user.id).copy()
+    trigger_ids = [message.message_id]
+    
+    # Add custom instructions if any
+    if message.from_user.id in user_prompts:
+        prompt_data = user_prompts.pop(message.from_user.id)
+        settings['custom_instructions'] = prompt_data['text']
+        trigger_ids.append(prompt_data['msg_id'])
+        
+    # Add to queue
     await queue.put({
         'user_id': message.from_user.id,
         'chat_id': message.chat.id,
         'type': 'file',
         'data': file_path,
-        'options': settings
+        'options': settings,
+        'trigger_msg_ids': trigger_ids
     })
     
-    await bot.edit_message_text(text=f"✅ Video masuk antrean. Posisi: {queue.qsize()}", chat_id=message.chat.id, message_id=wait_msg.message_id)
+    mode_text = "Smart AI" if settings['mode'] == "ai" else "Visual Auto"
+    await bot.edit_message_text(
+        text=f"✅ Video masuk antrean! (Mode: `{mode_text}`)\n"
+             f"Posisi: {queue.qsize()}\n\n"
+             f"AI akan menganalisa visual & audio video Anda agar clipping lebih akurat. 🔍",
+        chat_id=message.chat.id,
+        message_id=wait_msg.message_id,
+        parse_mode="Markdown"
+    )
+    
+    # Update last_menu_msgs to this status message so worker can delete it
+    last_menu_msgs[message.from_user.id] = wait_msg.message_id
 
 # Session tracking for interactive selections
 pending_sessions = {}
+
+# Global store for custom prompts (temporary)
+user_prompts = {}
+
+@dp.message(F.text & ~F.text.regexp(r'^https?://') & ~F.text.regexp(r'^/') & ~F.text.in_({"⏱ Set Durasi", "📱 Toggle Vertical", "💬 Toggle Subtitle", "🎞 Jumlah Klip", "⚙️ Settings", "🤖 Toggle Mode AI", "Kembali", "15s", "30s", "60s", "90s", "2m", "3m", "5m", "10m", "1 Klip", "3 Klip", "5 Klip", "10 Klip", "15 Klip"}))
+async def handle_custom_prompt(message: Message):
+    user_id = message.from_user.id
+    # Store message ID as well for deletion
+    user_prompts[user_id] = {"text": message.text, "msg_id": message.message_id}
+    
+    text = f"🧠 **AI Instruction saved:**\n`{message.text}`\n\nKirim video/link sekarang untuk menerapkan instruksi ini."
+    await show_ui(message.chat.id, user_id, text)
 
 @dp.message(F.text.regexp(r'^https?://'))
 async def handle_link(message: Message):
@@ -401,6 +447,10 @@ async def handle_link(message: Message):
         'msg_ids': [wait_msg.message_id, message.message_id],
         'options': get_user_settings(message.from_user.id).copy()
     }
+    
+    # Store global prompt if any (experimental)
+    if message.from_user.id in user_prompts:
+        pending_sessions[message.from_user.id]['options']['custom_instructions'] = user_prompts.pop(message.from_user.id)
     
     duration_str = format_duration(info.get('duration', 0))
     await wait_msg.edit_text(
@@ -468,27 +518,13 @@ async def finalize_link_selection(callback: CallbackQuery, lang_code: str):
         'chat_id': callback.message.chat.id,
         'type': job_type,
         'data': session['url'],
-        'options': session['options']
+        'options': session['options'],
+        'trigger_msg_ids': session['msg_ids']
     })
     
-    # Success message
+    # Success message (Editing the current selection message)
     await callback.message.edit_text(f"✅ Link masuk antrean! Posisi: {queue.qsize()}")
-    
-    # Ephemeral: Cleanup after 5 seconds
-    async def cleanup():
-        await asyncio.sleep(5)
-        try:
-            # Delete selection message
-            await callback.message.delete()
-            # Delete user's original link message
-            for mid in session['msg_ids']:
-                try: await bot.delete_message(callback.message.chat.id, mid)
-                except: pass
-        except: pass
-        finally:
-            pending_sessions.pop(user_id, None)
-
-    asyncio.create_task(cleanup())
+    last_menu_msgs[user_id] = callback.message.message_id
 
 @dp.message(F.document)
 async def handle_document(message: Message):
@@ -585,14 +621,46 @@ async def cmd_update(message: Message):
     except Exception as e:
         await status.edit_text(f"❌ **Update Gagal:**\n`{str(e)}`", parse_mode="Markdown")
 
+@dp.message(Command("l"))
+async def cmd_download_full(message: Message, command: CommandObject):
+    if not command.args:
+        return await message.answer("💡 **Cara penggunaan:** `/l [link]`\nContoh: `/l https://youtube.com/watch?v=...`", parse_mode="Markdown")
+        
+    url = command.args.strip()
+    wait_msg = await message.answer("📥 **Mempersiapkan download video penuh...**", parse_mode="Markdown")
+    
+    info = await engine.get_video_info(url)
+    if not info:
+        return await wait_msg.edit_text("❌ Gagal mengambil info video. Pastikan link benar.")
+        
+    kb = InlineKeyboardBuilder()
+    for f in info['formats']:
+        kb.button(text=f"{f['height']}p ({f['ext']})", callback_data=f"sel_q_{f['id']}")
+    kb.button(text="Auto (Best)", callback_data="sel_q_best")
+    kb.adjust(2)
+    
+    pending_sessions[message.from_user.id] = {
+        'url': url,
+        'info': info,
+        'msg_ids': [wait_msg.message_id, message.message_id],
+        'options': {'type': 'full_download', 'vertical': False, 'subtitles': False}
+    }
+    
+    await wait_msg.edit_text(
+        f"📥 **Link Full Download Terdeteksi!**\n🎬 **{info['title'][:50]}...**\n\nSilakan pilih kualitas:",
+        reply_markup=kb.as_markup(),
+        parse_mode="Markdown"
+    )
+
 async def main():
     if not os.path.exists(TEMP_DIR):
         os.makedirs(TEMP_DIR, exist_ok=True)
-        
+    
     for _ in range(MAX_PARALLEL_JOBS):
         asyncio.create_task(worker())
     
     logger.info("Bot is starting...")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
