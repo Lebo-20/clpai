@@ -1,8 +1,10 @@
 import os
+import shutil
 import asyncio
 import logging
 import uuid
 import re
+import psutil
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -93,25 +95,35 @@ async def worker():
             now = datetime.now()
             elapsed = (now - job_start_time).total_seconds()
             
-            # Rate limit: max once every 2.5 seconds, unless forced
+            # Rate limit: max once every 3 seconds to avoid Telegram Flood
             now_ts = now.timestamp()
-            if not force and now_ts - last_update_time[0] < 2.5:
+            if not force and now_ts - last_update_time[0] < 3:
                 return
             
             async with update_lock:
                 last_update_time[0] = now_ts
-                eta_str = "Calculating..."
-                if percentage > 0.5: # Only show ETA after some progress
+                eta_str = "Menghitung..."
+                if percentage > 1.0: # Start calculating ETA after 1% progress
                     total_est = elapsed / (percentage / 100)
                     remaining = total_est - elapsed
                     eta_str = format_duration(remaining)
                 
+                # Premium Progress Layout with System Stats
+                cpu_usage = psutil.cpu_percent()
+                ram_usage = psutil.virtual_memory().percent
+                
                 progress_text = (
-                    f"🚀 **Processing Job**: `{job_id}`\n"
-                    f"📊 Stage: `{stage_msg}`\n\n"
-                    f"{get_progress_bar(percentage)}\n"
-                    f"⏱ Elapsed: {format_duration(elapsed)}\n"
-                    f"⏳ ETA: {eta_str}"
+                    f"⚙️ **Processing Job**: `{job_id}`\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📍 **Stage**: `{stage_msg}`\n"
+                    f"📊 **Progress**: {get_progress_bar(percentage)}\n\n"
+                    f"🖥 **System Load**:\n"
+                    f"├ CPU: `{cpu_usage}%` | RAM: `{ram_usage}%` \n"
+                    f"└ *Parallel Jobs*: `{queue.qsize() + MAX_PARALLEL_JOBS}`\n\n"
+                    f"⏱ **Elapsed**: `{format_duration(elapsed)}`\n"
+                    f"⏳ **Estimasi Sisa**: `{eta_str}`\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"ℹ️ *Bot sedang bekerja keras untuk video Anda. Mohon tunggu sebentar!*"
                 )
                 try:
                     await bot.edit_message_text(text=progress_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
@@ -657,7 +669,15 @@ async def cmd_download_full(message: Message, command: CommandObject):
     )
 
 async def main():
-    if not os.path.exists(TEMP_DIR):
+    if os.path.exists(TEMP_DIR):
+        logger.info(f"Cleaning up temporary directory: {TEMP_DIR}")
+        for f in os.listdir(TEMP_DIR):
+            path = os.path.join(TEMP_DIR, f)
+            try:
+                if os.path.isfile(path): os.remove(path)
+                elif os.path.isdir(path): shutil.rmtree(path)
+            except: pass
+    else:
         os.makedirs(TEMP_DIR, exist_ok=True)
     
     for _ in range(MAX_PARALLEL_JOBS):
